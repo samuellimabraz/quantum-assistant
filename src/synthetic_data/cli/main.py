@@ -1,6 +1,7 @@
 """Main CLI application."""
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich import print as rprint
@@ -8,7 +9,17 @@ from rich.console import Console
 from rich.table import Table
 
 from synthetic_data.config import PipelineConfig
-from synthetic_data.cli.commands import export, generate, parse
+from synthetic_data.cli.commands import (
+    parse,
+    transcribe,
+    chunk,
+    filter_quality,
+    classify,
+    generate,
+    build,
+    export,
+    pipeline,
+)
 from synthetic_data.utils import PipelineCache
 
 app = typer.Typer(
@@ -19,10 +30,16 @@ app = typer.Typer(
 
 console = Console()
 
-# Register commands
-app.command(name="parse")(parse)
-app.command(name="generate")(generate)
-app.command(name="export")(export)
+# Register pipeline commands
+app.command(name="parse", help="Step 1: Parse documents and resolve images")(parse)
+app.command(name="transcribe", help="Step 2: Transcribe images using VLM")(transcribe)
+app.command(name="chunk", help="Step 3: Chunk documents into context-sized pieces")(chunk)
+app.command(name="filter", help="Step 4: Filter chunks for quality")(filter_quality)
+app.command(name="classify", help="Step 5: Classify chunks into categories")(classify)
+app.command(name="generate", help="Step 6: Generate synthetic Q&A samples")(generate)
+app.command(name="build", help="Step 7: Build train/val/test splits")(build)
+app.command(name="export", help="Step 8: Export to HuggingFace format")(export)
+app.command(name="pipeline", help="Run complete pipeline (all steps)")(pipeline)
 
 
 @app.command()
@@ -42,13 +59,11 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Name", style="cyan")
     table.add_column("Weight", justify="right")
-    table.add_column("Keywords", style="dim")
+    table.add_column("Description", style="dim")
 
     for cat in config.categories:
-        keywords = ", ".join(cat.keywords[:3])
-        if len(cat.keywords) > 3:
-            keywords += "..."
-        table.add_row(cat.name, f"{cat.weight:.1f}", keywords)
+        desc = cat.description[:50] + "..." if len(cat.description) > 50 else cat.description
+        table.add_row(cat.name, f"{cat.weight:.1f}", desc)
 
     console.print(table)
 
@@ -58,6 +73,7 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
     console.print(f"  Question model: {config.generation.question_model}")
     console.print(f"  Vision model: {config.generation.vision_model or 'None'}")
     console.print(f"  Answer model: {config.generation.answer_model}")
+    console.print(f"  Curate model: {config.generation.curate_model}")
     console.print(f"  Multimodal ratio: {config.generation.multimodal_ratio:.1%}")
     console.print(f"  Content filtering: {config.generation.enable_content_filtering}")
     console.print(f"  Deduplication: {config.generation.enable_deduplication}")

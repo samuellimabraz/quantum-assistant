@@ -1,28 +1,31 @@
-"""CLI commands implementation."""
-
-import hashlib
+import asyncio
+import json
+import pickle
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import (
     Progress,
     SpinnerColumn,
     TextColumn,
     BarColumn,
+    MofNCompleteColumn,
     TaskProgressColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
-    MofNCompleteColumn,
 )
+from rich.table import Table
 
 from synthetic_data.config import PipelineConfig
 from synthetic_data.dataset import DatasetBuilder, HuggingFaceExporter
 from synthetic_data.extractors import ContentChunker, DocumentIngestion, ImageTranscriber
 from synthetic_data.generators import CategoryManager, GenerationPipeline
 from synthetic_data.models import ModelRegistry
+from synthetic_data.parsers.base import Document
 from synthetic_data.utils import PipelineCache, QualityFilter
 
 console = Console()
@@ -33,355 +36,112 @@ def parse(
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
     clear_cache: bool = typer.Option(False, "--clear-cache", help="Clear cache before running"),
 ):
-    """Parse documentation and extract content."""
-    console.print("[bold cyan]Stage 1: Parsing Documentation[/bold cyan]\n")
+    """Step 1: Parse documents and resolve images (no transcription)."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 1: Document Parsing[/bold cyan]\n"
+            "Parse documents and resolve image paths",
+            title="Parse",
+        )
+    )
 
     config = PipelineConfig.from_yaml(config_path)
     images_dir = Path(config.dataset.images_dir)
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    output_dir = Path(config.dataset.parsed_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize cache
-    cache_dir = Path(config.dataset.parsed_dir).parent / ".cache"
+    cache_dir = output_dir.parent / ".cache"
     cache = PipelineCache(cache_dir)
 
     if clear_cache:
         console.print("[yellow]Clearing cache...[/yellow]")
-        cache.clear_all()
+        cache.clear_stage("parse")
 
-    # Show cache info
-    if not no_cache:
-        cache_info = cache.get_cache_info()
-        if cache_info:
-            console.print("[cyan]Cache status:[/cyan]")
-            for stage, info in cache_info.items():
-                size_mb = info["size"] / 1024 / 1024
-                console.print(f"  {stage}: {info['count']} items, {size_mb:.1f}MB")
-            console.print()
+    # Check for existing output
+    output_file = output_dir / "documents.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Loading from: {output_file}[/cyan]")
+        with open(output_file, "rb") as f:
+            all_documents = pickle.load(f)
+        console.print(f"[green]✓ Loaded {len(all_documents)} documents[/green]")
+        return
 
-    # Parse documents with optional image transcription
+    # Parse documents with parallel processing
+    ingestion = DocumentIngestion(images_output_dir=images_dir)
     all_documents = []
 
-    if config.generation.enable_image_transcription and config.generation.vision_model:
-        console.print("[bold cyan]Image transcription enabled[/bold cyan]")
+    # Helper function for parallel parsing
+    def parse_file_safe(file_path: Path, source) -> Optional[Document]:
+        """Parse a file safely, returning None on error."""
+        try:
+            if ingestion.should_include(file_path, source):
+                return ingestion.parse_file(file_path)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to parse {file_path}: {e}[/yellow]")
+        return None
 
-        with ModelRegistry(config.models) as model_registry:
-            try:
-                vision_client = model_registry.get_vlm_client(config.generation.vision_model)
-                image_transcriber = ImageTranscriber(
-                    vision_client,
-                    config.prompts.image_transcription,
-                    batch_size=config.generation.vlm_batch_size,
-                    max_concurrent=config.generation.vlm_concurrency,
-                )
-                console.print(
-                    f"  ✓ Vision model loaded (batch={config.generation.vlm_batch_size}, "
-                    f"concurrency={config.generation.vlm_concurrency})\n"
-                )
-            except Exception as e:
-                console.print(f"  Warning: Vision model not available: {e}")
-                console.print("  Continuing without image transcription\n")
-                image_transcriber = None
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        # Collect all files to process
+        all_files_to_process = []
+        for source in config.sources:
+            source_path = Path(source.path)
+            files = []
 
-            ingestion = DocumentIngestion(
-                images_output_dir=images_dir, image_transcriber=image_transcriber
-            )
+            if source_path.is_file():
+                files = [source_path]
+            elif source_path.is_dir():
+                for pattern in source.include_patterns:
+                    files.extend(list(source_path.rglob(pattern)))
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-                console=console,
-            ) as progress:
-                # Count total files across all sources
-                total_files = 0
-                source_file_counts = {}
-                for source in config.sources:
-                    source_path = Path(source.path)
-                    count = 0
-                    if source_path.is_file():
-                        count = 1
-                    elif source_path.is_dir():
-                        for pattern in source.include_patterns:
-                            count += len(list(source_path.rglob(pattern)))
-                    # Apply max_files limit if set
-                    if source.max_files is not None and count > source.max_files:
-                        count = source.max_files
-                    source_file_counts[source.path] = count
-                    total_files += count
+            if source.max_files:
+                files = files[: source.max_files]
 
-                task = progress.add_task(f"Parsing {total_files} files...", total=total_files)
-                files_processed = 0
+            # Add source context to each file
+            all_files_to_process.extend([(f, source) for f in files])
 
-                for source in config.sources:
-                    source_path = Path(source.path)
+        total_files = len(all_files_to_process)
+        task = progress.add_task(f"Parsing {total_files} files...", total=total_files)
 
-                    # Get list of files for this source
-                    source_files = []
-                    if source_path.is_file():
-                        source_files = [source_path]
-                    elif source_path.is_dir():
-                        for pattern in source.include_patterns:
-                            source_files.extend(list(source_path.rglob(pattern)))
+        # Parse files in parallel
+        max_workers = min(8, total_files)  # Limit parallelism
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all parsing tasks
+            future_to_file = {
+                executor.submit(parse_file_safe, file_path, source): file_path
+                for file_path, source in all_files_to_process
+            }
 
-                    # Apply max_files limit if set
-                    if source.max_files is not None:
-                        source_files = source_files[: source.max_files]
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                doc = future.result()
+                if doc:
+                    all_documents.append(doc)
+                progress.update(task, advance=1)
 
-                    # Generate unique cache stage for this source
-                    source_cache_id = hashlib.md5(str(source.path).encode()).hexdigest()[:8]
-                    cache_stage = f"parse_{source_cache_id}"
+    # Save results
+    with open(output_file, "wb") as f:
+        pickle.dump(all_documents, f)
 
-                    cache_key = cache.get_stage_cache_key(
-                        cache_stage,
-                        {
-                            "transcription": config.generation.enable_image_transcription,
-                            "vision_model": config.generation.vision_model,
-                        },
-                        source_files,
-                    )
-
-                    # Check cache for this specific source
-                    if not no_cache and cache.is_cached(cache_stage, cache_key):
-                        cached_docs = cache.load_documents(cache_stage, cache_key)
-                        if cached_docs:
-                            all_documents.extend(cached_docs)
-                            files_processed += len(source_files)
-                            progress.update(task, advance=len(source_files))
-                            console.print(
-                                f"  ✓ [{files_processed}/{total_files}] Loaded from cache: "
-                                f"{source.path} ({len(cached_docs)} docs, {len(source_files)} files)"
-                            )
-                            continue
-
-                    # Parse if not cached
-                    documents = ingestion.ingest_source(source)
-                    all_documents.extend(documents)
-                    files_processed += len(source_files)
-
-                    # Save to cache immediately after processing this source
-                    if not no_cache and documents:
-                        cache.save_documents(cache_stage, cache_key, documents)
-
-                    progress.update(task, advance=len(source_files))
-                    console.print(
-                        f"  ✓ [{files_processed}/{total_files}] Processed {source.path}: "
-                        f"{len(documents)} docs from {len(source_files)} files"
-                    )
-    else:
-        console.print("[bold cyan]Image transcription disabled[/bold cyan]\n")
-
-        ingestion = DocumentIngestion(images_output_dir=images_dir)
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            # Count total files across all sources
-            total_files = 0
-            source_file_counts = {}
-            for source in config.sources:
-                source_path = Path(source.path)
-                count = 0
-                if source_path.is_file():
-                    count = 1
-                elif source_path.is_dir():
-                    for pattern in source.include_patterns:
-                        count += len(list(source_path.rglob(pattern)))
-                # Apply max_files limit if set
-                if source.max_files is not None and count > source.max_files:
-                    count = source.max_files
-                source_file_counts[source.path] = count
-                total_files += count
-
-            task = progress.add_task(f"Parsing {total_files} files...", total=total_files)
-            files_processed = 0
-
-            for source in config.sources:
-                source_path = Path(source.path)
-
-                # Get list of files for this source
-                source_files = []
-                if source_path.is_file():
-                    source_files = [source_path]
-                elif source_path.is_dir():
-                    for pattern in source.include_patterns:
-                        source_files.extend(list(source_path.rglob(pattern)))
-
-                # Apply max_files limit if set
-                if source.max_files is not None:
-                    source_files = source_files[: source.max_files]
-
-                # Generate unique cache stage for this source
-                source_cache_id = hashlib.md5(str(source.path).encode()).hexdigest()[:8]
-                cache_stage = f"parse_{source_cache_id}"
-
-                cache_key = cache.get_stage_cache_key(
-                    cache_stage,
-                    {
-                        "transcription": False,
-                        "vision_model": None,
-                    },
-                    source_files,
-                )
-
-                # Check cache for this specific source
-                if not no_cache and cache.is_cached(cache_stage, cache_key):
-                    cached_docs = cache.load_documents(cache_stage, cache_key)
-                    if cached_docs:
-                        all_documents.extend(cached_docs)
-                        files_processed += len(source_files)
-                        progress.update(task, advance=len(source_files))
-                        console.print(
-                            f"  ✓ [{files_processed}/{total_files}] Loaded from cache: "
-                            f"{source.path} ({len(cached_docs)} docs, {len(source_files)} files)"
-                        )
-                        continue
-
-                # Parse if not cached
-                documents = ingestion.ingest_source(source)
-                all_documents.extend(documents)
-                files_processed += len(source_files)
-
-                # Save to cache immediately after processing this source
-                if not no_cache and documents:
-                    cache.save_documents(cache_stage, cache_key, documents)
-
-                progress.update(task, advance=len(source_files))
-                console.print(
-                    f"  ✓ [{files_processed}/{total_files}] Processed {source.path}: "
-                    f"{len(documents)} docs from {len(source_files)} files"
-                )
-
-    # Count resolved images and transcriptions
-    total_images = sum(len(doc.images) for doc in all_documents)
-    resolved_images = sum(1 for doc in all_documents for img in doc.images if img.resolved_path)
-    transcribed_images = sum(1 for doc in all_documents for img in doc.images if img.transcription)
-
-    # Display parsing metrics
-    parsing_table = Table(title="Parsing Metrics", show_header=True)
-    parsing_table.add_column("Metric", style="cyan")
-    parsing_table.add_column("Count", style="green", justify="right")
-    parsing_table.add_row("Documents Parsed", str(len(all_documents)))
-    parsing_table.add_row("Images Found", str(total_images))
-    parsing_table.add_row("Images Resolved", str(resolved_images))
-    parsing_table.add_row("Images Transcribed", str(transcribed_images))
-
-    console.print("\n")
-    console.print(parsing_table)
-
-    # Stage 2: Chunk and filter content
-    console.print("\n[bold cyan]Stage 2: Chunking and Filtering Content[/bold cyan]\n")
-
-    chunker = ContentChunker(
-        max_length=config.generation.max_context_length,
-        overlap=config.generation.chunk_overlap,
-    )
-
-    # Check cache for chunks
-    chunk_cache_key = cache.get_stage_cache_key(
-        "chunk",
-        {
-            "max_length": config.generation.max_context_length,
-            "overlap": config.generation.chunk_overlap,
-        },
-        [doc.source_path for doc in all_documents],
-    )
-
-    all_chunks = []
-    if not no_cache and cache.is_cached("chunk", chunk_cache_key):
-        all_chunks = cache.load_chunks("chunk", chunk_cache_key)
-        if all_chunks:
-            console.print(f"  ✓ Loaded {len(all_chunks)} chunks from cache")
-    else:
-        # Chunk documents
-        for doc in all_documents:
-            chunks = chunker.chunk_document(doc)
-            all_chunks.extend(chunks)
-
-        console.print(f"  ✓ Created {len(all_chunks)} initial chunks")
-
-        # Save to cache
-        if not no_cache:
-            cache.save_chunks("chunk", chunk_cache_key, all_chunks)
-
-    # Apply quality filtering if enabled
-    if config.generation.enable_content_filtering:
-        console.print("\n[bold cyan]Applying quality filtering...[/bold cyan]")
-
-        with ModelRegistry(config.models) as model_registry:
-            question_client = model_registry.get_llm_client(config.generation.question_model)
-            quality_filter = QualityFilter(question_client)
-
-            filtered_chunks = []
-            total_images_before = sum(len(chunk.images) for chunk in all_chunks)
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                MofNCompleteColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task(
-                    f"Filtering {len(all_chunks)} chunks...", total=len(all_chunks)
-                )
-
-                for chunk in all_chunks:
-                    try:
-                        if quality_filter.is_quality_content(
-                            chunk, config.prompts.content_quality_check
-                        ):
-                            # Filter images based on transcription quality
-                            if chunk.is_multimodal:
-                                quality_images = []
-                                for img in chunk.images:
-                                    if quality_filter.is_quality_image(
-                                        img, config.prompts.image_quality_check
-                                    ):
-                                        quality_images.append(img)
-                                chunk.images = quality_images
-
-                            filtered_chunks.append(chunk)
-                    except Exception as e:
-                        console.print(f"\n  Warning: Error filtering chunk: {e}")
-                        filtered_chunks.append(chunk)
-
-                    progress.update(task, advance=1)
-
-            removed_count = len(all_chunks) - len(filtered_chunks)
-            total_images_after = sum(len(chunk.images) for chunk in filtered_chunks)
-            images_removed = total_images_before - total_images_after
-
-            console.print(f"  ✓ Filtered {removed_count} low-quality chunks")
-            console.print(f"  ✓ Filtered {images_removed} low-quality images")
-            console.print(f"  ✓ Kept {len(filtered_chunks)} high-quality chunks")
-            all_chunks = filtered_chunks
-    else:
-        console.print("  Content filtering disabled")
-
-    # Save to parsed directory
-    output_dir = Path(config.dataset.parsed_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    import json
-
-    summary_file = output_dir / "summary.json"
+    # Save summary
     summary = {
         "total_documents": len(all_documents),
-        "total_chunks": len(all_chunks),
-        "filtering_enabled": config.generation.enable_content_filtering,
+        "total_images": sum(len(doc.images) for doc in all_documents),
+        "images_resolved": sum(
+            1 for doc in all_documents for img in doc.images if img.resolved_path
+        ),
+        "total_code_blocks": sum(len(doc.code_blocks) for doc in all_documents),
         "documents": [
             {
                 "path": str(doc.source_path),
@@ -395,287 +155,891 @@ def parse(
         ],
     }
 
-    with open(summary_file, "w") as f:
+    with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    # Save complete chunks for reuse
-    chunks_file = output_dir / "chunks.jsonl"
-    with open(chunks_file, "w", encoding="utf-8") as f:
-        for chunk in all_chunks:
-            chunk_data = {
-                "text": chunk.text,  # Save complete text for reuse
-                "source_path": str(chunk.source_path),
-                "chunk_id": chunk.chunk_id,
-                "code_blocks": chunk.code_blocks,
-                "images": [
-                    {
-                        "path": img.path,
-                        "resolved_path": img.resolved_path,
-                        "alt_text": img.alt_text,
-                        "caption": img.caption,
-                        "context": img.context,
-                        "transcription": img.transcription,
-                    }
-                    for img in chunk.images
-                ],
-                "metadata": chunk.metadata,
-                "token_estimate": chunk.token_estimate,
-            }
-            f.write(json.dumps(chunk_data, ensure_ascii=False) + "\n")
+    # Display results
+    table = Table(title="Parsing Complete")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="green", justify="right")
+    table.add_row("Documents", str(len(all_documents)))
+    table.add_row("Code Blocks", str(summary["total_code_blocks"]))
+    table.add_row("Images Found", str(summary["total_images"]))
+    table.add_row("Images Resolved", str(summary["images_resolved"]))
 
-    console.print(f"\nSummary saved to {summary_file}")
-    console.print(f"Chunks saved to {chunks_file}")
+    console.print("\n")
+    console.print(table)
+    console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
 
 
-def generate(
+def transcribe(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
 ):
-    """Generate synthetic dataset (full pipeline)."""
+    """Step 2: Transcribe images using VLM (batch async)."""
     console.print(
         Panel.fit(
-            "[bold cyan]Synthetic Dataset Generation[/bold cyan]\n" f"Target: {config_path.name}",
-            title="Pipeline",
+            "[bold cyan]Step 2: Image Transcription[/bold cyan]\n"
+            "Transcribe images using Vision Language Model",
+            title="Transcribe",
         )
     )
 
     config = PipelineConfig.from_yaml(config_path)
-    images_dir = Path(config.dataset.images_dir)
 
-    # Display configuration summary
-    config_table = Table(title="Configuration", show_header=True)
-    config_table.add_column("Parameter", style="cyan")
-    config_table.add_column("Value", style="green")
-    config_table.add_row("Target Samples", f"{config.generation.target_samples:,}")
-    config_table.add_row(
-        "LLM Batch/Concurrency",
-        f"{config.generation.llm_batch_size}/{config.generation.llm_concurrency}",
-    )
-    config_table.add_row(
-        "VLM Batch/Concurrency",
-        f"{config.generation.vlm_batch_size}/{config.generation.vlm_concurrency}",
-    )
-    config_table.add_row("Multimodal Ratio", f"{config.generation.multimodal_ratio:.1%}")
-    config_table.add_row(
-        "Image Transcription",
-        "Enabled" if config.generation.enable_image_transcription else "Disabled",
-    )
-    config_table.add_row(
-        "Content Filtering", "Enabled" if config.generation.enable_content_filtering else "Disabled"
-    )
-    console.print(config_table)
-    console.print()
+    if not config.generation.enable_image_transcription or not config.generation.vision_model:
+        console.print("[yellow]Image transcription disabled in config, skipping[/yellow]")
+        return
 
-    # Stage 1: Parse with optional transcription
-    console.print("[bold]Stage 1: Parsing documentation[/bold]")
+    # Load documents
+    parsed_dir = Path(config.dataset.parsed_dir)
+    input_file = parsed_dir / "documents.pkl"
 
-    all_documents = []
+    if not input_file.exists():
+        console.print("[red]✗ No parsed documents found. Run 'parse' first.[/red]")
+        raise typer.Exit(1)
 
-    if config.generation.enable_image_transcription and config.generation.vision_model:
+    with open(input_file, "rb") as f:
+        all_documents = pickle.load(f)
+
+    console.print(f"[cyan]Loaded {len(all_documents)} documents[/cyan]")
+
+    # Setup output
+    output_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for existing transcriptions
+    output_file = output_dir / "documents.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Transcriptions already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-transcribe[/yellow]")
+        return
+
+    # Count images needing transcription
+    images_to_transcribe = sum(
+        1
+        for doc in all_documents
+        for img in doc.images
+        if img.resolved_path and not img.transcription
+    )
+
+    if images_to_transcribe == 0:
+        console.print("[yellow]No images need transcription[/yellow]")
+        # Save as-is
+        with open(output_file, "wb") as f:
+            pickle.dump(all_documents, f)
+        return
+
+    console.print(f"[cyan]Found {images_to_transcribe} images to transcribe[/cyan]")
+    console.print(
+        f"[cyan]Using batch_size={config.generation.vlm_batch_size}, "
+        f"concurrency={config.generation.vlm_concurrency}[/cyan]"
+    )
+
+    # Transcribe images
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Transcribing images...", total=images_to_transcribe)
+        
+        # Progress callback
+        def update_transcription_progress(completed):
+            progress.update(task, completed=completed)
+        
         with ModelRegistry(config.models) as model_registry:
             try:
                 vision_client = model_registry.get_vlm_client(config.generation.vision_model)
-                image_transcriber = ImageTranscriber(
+                transcriber = ImageTranscriber(
                     vision_client,
                     config.prompts.image_transcription,
                     batch_size=config.generation.vlm_batch_size,
                     max_concurrent=config.generation.vlm_concurrency,
                 )
-                console.print(
-                    f"  ✓ Image transcription enabled (batch={config.generation.vlm_batch_size}, "
-                    f"concurrency={config.generation.vlm_concurrency})"
+
+                # Batch transcribe all documents with progress callback
+                asyncio.run(
+                    transcriber.transcribe_batch_documents_async(
+                        all_documents, update_transcription_progress
+                    )
                 )
+
+                transcribed_count = sum(
+                    1 for doc in all_documents for img in doc.images if img.transcription
+                )
+
+                console.print(f"[green]✓ Transcribed {transcribed_count} images[/green]")
+
             except Exception as e:
-                console.print(f"  Warning: Vision model not available: {e}")
-                image_transcriber = None
+                console.print(f"[red]✗ Transcription failed: {e}[/red]")
+                raise
 
-            ingestion = DocumentIngestion(
-                images_output_dir=images_dir, image_transcriber=image_transcriber
-            )
+    # Save transcribed documents
+    with open(output_file, "wb") as f:
+        pickle.dump(all_documents, f)
 
-            for source in config.sources:
-                console.print(f"  Processing {source.path}...")
-                documents = ingestion.ingest_source(source)
-                all_documents.extend(documents)
+    # Save summary
+    summary = {
+        "total_documents": len(all_documents),
+        "total_images": sum(len(doc.images) for doc in all_documents),
+        "images_transcribed": sum(
+            1 for doc in all_documents for img in doc.images if img.transcription
+        ),
+        "sample_transcriptions": [
+            {
+                "image_path": img.resolved_path,
+                "transcription": (
+                    img.transcription[:200] + "..."
+                    if len(img.transcription) > 200
+                    else img.transcription
+                ),
+            }
+            for doc in all_documents[:3]
+            for img in doc.images
+            if img.transcription
+        ][:5],
+    }
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    console.print(f"[green]✓ Saved to: {output_dir}[/green]")
+
+
+def chunk(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+):
+    """Step 3: Chunk documents into manageable pieces."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 3: Content Chunking[/bold cyan]\n"
+            "Split documents into context-sized chunks",
+            title="Chunk",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    # Load documents (prefer transcribed, fallback to parsed)
+    transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
+    parsed_dir = Path(config.dataset.parsed_dir)
+
+    if (transcribed_dir / "documents.pkl").exists():
+        input_file = transcribed_dir / "documents.pkl"
+        console.print("[cyan]Loading transcribed documents[/cyan]")
+    elif (parsed_dir / "documents.pkl").exists():
+        input_file = parsed_dir / "documents.pkl"
+        console.print("[cyan]Loading parsed documents (no transcriptions)[/cyan]")
     else:
-        ingestion = DocumentIngestion(images_output_dir=images_dir)
+        console.print("[red]✗ No documents found. Run 'parse' first.[/red]")
+        raise typer.Exit(1)
 
-        for source in config.sources:
-            console.print(f"  Processing {source.path}...")
-            documents = ingestion.ingest_source(source)
-            all_documents.extend(documents)
+    with open(input_file, "rb") as f:
+        all_documents = pickle.load(f)
 
-    transcribed_images = sum(1 for doc in all_documents for img in doc.images if img.transcription)
+    # Setup output
+    output_dir = Path(config.dataset.parsed_dir).parent / "chunks"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Display parsing summary
-    parse_summary = Table(title="Stage 1 Summary")
-    parse_summary.add_column("Metric", style="cyan")
-    parse_summary.add_column("Count", style="green", justify="right")
-    parse_summary.add_row("Documents Parsed", str(len(all_documents)))
-    parse_summary.add_row("Images Transcribed", str(transcribed_images))
-    console.print(parse_summary)
-    console.print()
+    # Check cache
+    output_file = output_dir / "chunks.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Chunks already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-chunk[/yellow]")
+        return
 
-    # Stage 2: Chunk
-    console.print("[bold]Stage 2: Chunking content[/bold]")
+    # Chunk documents with parallel processing
     chunker = ContentChunker(
         max_length=config.generation.max_context_length,
         overlap=config.generation.chunk_overlap,
     )
 
     all_chunks = []
-    for doc in all_documents:
-        chunks = chunker.chunk_document(doc)
-        all_chunks.extend(chunks)
 
-    # Display chunking summary
-    chunk_summary = Table(title="Stage 2 Summary")
-    chunk_summary.add_column("Metric", style="cyan")
-    chunk_summary.add_column("Value", style="green", justify="right")
-    chunk_summary.add_row("Total Chunks", str(len(all_chunks)))
-    chunk_summary.add_row("Chunks with Code", str(sum(1 for c in all_chunks if c.code_blocks)))
-    chunk_summary.add_row("Chunks with Images", str(sum(1 for c in all_chunks if c.images)))
-    console.print(chunk_summary)
-    console.print()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Chunking documents...", total=len(all_documents))
 
-    # Stage 3: Classify
-    console.print("[bold]Stage 3: Classifying by category[/bold]")
+        # Chunk documents in parallel
+        max_workers = min(8, len(all_documents))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all chunking tasks
+            future_to_doc = {
+                executor.submit(chunker.chunk_document, doc): doc for doc in all_documents
+            }
 
-    with ModelRegistry(config.models) as model_registry:
-        # Get question model for classification
-        question_client = model_registry.get_llm_client(config.generation.question_model)
+            # Collect results as they complete
+            for future in as_completed(future_to_doc):
+                chunks = future.result()
+                all_chunks.extend(chunks)
+                progress.update(task, advance=1)
 
-        category_manager = CategoryManager(config.categories, question_client)
+    # Save chunks
+    with open(output_file, "wb") as f:
+        pickle.dump(all_chunks, f)
 
-        chunks_by_category = category_manager.organize_by_category(
-            all_chunks, config.prompts.category_classification
-        )
+    # Save summary
+    summary = {
+        "total_chunks": len(all_chunks),
+        "chunks_with_code": sum(1 for c in all_chunks if c.code_blocks),
+        "chunks_with_images": sum(1 for c in all_chunks if c.images),
+        "multimodal_chunks": sum(
+            1 for c in all_chunks if c.images and any(img.transcription for img in c.images)
+        ),
+        "avg_chunk_length": (
+            sum(len(c.text) for c in all_chunks) / len(all_chunks) if all_chunks else 0
+        ),
+    }
 
-        # Display classification summary
-        classification_table = Table(title="Stage 3 Summary - Category Distribution")
-        classification_table.add_column("Category", style="cyan")
-        classification_table.add_column("Chunks", style="green", justify="right")
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
 
-        for category, chunks in sorted(
-            chunks_by_category.items(), key=lambda x: len(x[1]), reverse=True
-        ):
-            classification_table.add_row(category, str(len(chunks)))
-
-        console.print(classification_table)
-        console.print()
-
-        # Stage 4: Generate
-        console.print("[bold]Stage 4: Generating synthetic samples[/bold]")
-
-        pipeline = GenerationPipeline(config, model_registry, category_manager)
-        samples = pipeline.generate_samples(chunks_by_category)
-
-    # Display generation summary
-    gen_summary = Table(title="Stage 4 Summary - Generated Samples")
-    gen_summary.add_column("Metric", style="cyan")
-    gen_summary.add_column("Value", style="green", justify="right")
-    gen_summary.add_row("Total Samples", str(len(samples)))
-    gen_summary.add_row("Multimodal (with images)", str(sum(1 for s in samples if s.image_path)))
-    gen_summary.add_row("Text-only", str(sum(1 for s in samples if not s.image_path)))
-    gen_summary.add_row("With Code Context", str(sum(1 for s in samples if s.code_context)))
-
-    # Distribution by type
-    by_type = {}
-    for s in samples:
-        by_type[s.question_type] = by_type.get(s.question_type, 0) + 1
-    gen_summary.add_row("", "")  # Spacer
-    for qtype, count in sorted(by_type.items()):
-        gen_summary.add_row(f"  Type: {qtype}", str(count))
+    # Display results
+    table = Table(title="Chunking Complete")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green", justify="right")
+    table.add_row("Total Chunks", str(len(all_chunks)))
+    table.add_row("Chunks with Code", str(summary["chunks_with_code"]))
+    table.add_row("Chunks with Images", str(summary["chunks_with_images"]))
+    table.add_row("Multimodal Chunks", str(summary["multimodal_chunks"]))
+    table.add_row("Avg Length", f"{summary['avg_chunk_length']:.0f} chars")
 
     console.print("\n")
-    console.print(gen_summary)
-    console.print()
+    console.print(table)
+    console.print(f"[green]✓ Saved to: {output_dir}[/green]")
 
-    # Save generated samples
-    generated_dir = Path(config.dataset.generated_dir)
-    generated_dir.mkdir(parents=True, exist_ok=True)
 
-    import json
+def filter_quality(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+):
+    """Step 4: Filter chunks for quality."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 4: Quality Filtering[/bold cyan]\n"
+            "Filter low-quality content and images",
+            title="Filter",
+        )
+    )
 
-    with open(generated_dir / "samples.jsonl", "w") as f:
+    config = PipelineConfig.from_yaml(config_path)
+
+    if not config.generation.enable_content_filtering:
+        console.print("[yellow]Content filtering disabled in config, skipping[/yellow]")
+
+        # Just copy chunks as-is
+        chunks_dir = Path(config.dataset.parsed_dir).parent / "chunks"
+        output_dir = Path(config.dataset.parsed_dir).parent / "filtered"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if (chunks_dir / "chunks.pkl").exists():
+            import shutil
+
+            shutil.copy2(chunks_dir / "chunks.pkl", output_dir / "chunks.pkl")
+            shutil.copy2(chunks_dir / "summary.json", output_dir / "summary.json")
+            console.print(f"[green]✓ Copied unfiltered chunks to: {output_dir}[/green]")
+        return
+
+    # Load chunks
+    chunks_dir = Path(config.dataset.parsed_dir).parent / "chunks"
+    input_file = chunks_dir / "chunks.pkl"
+
+    if not input_file.exists():
+        console.print("[red]✗ No chunks found. Run 'chunk' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(input_file, "rb") as f:
+        all_chunks = pickle.load(f)
+
+    console.print(f"[cyan]Loaded {len(all_chunks)} chunks[/cyan]")
+
+    # Setup output
+    output_dir = Path(config.dataset.parsed_dir).parent / "filtered"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check cache
+    output_file = output_dir / "chunks.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Filtered chunks already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-filter[/yellow]")
+        return
+
+    # Filter chunks using batch processing
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Filtering chunks...", total=len(all_chunks))
+        
+        # Progress callback
+        def update_filter_progress(completed):
+            progress.update(task, completed=completed)
+        
+        with ModelRegistry(config.models) as model_registry:
+            question_client = model_registry.get_llm_client(config.generation.question_model)
+            quality_filter = QualityFilter(question_client)
+
+            total_images_before = sum(len(chunk.images) for chunk in all_chunks)
+
+            console.print(
+                f"[cyan]Batch size={config.generation.llm_batch_size}, "
+                f"concurrency={config.generation.llm_concurrency}[/cyan]"
+            )
+
+            # Use async batch filtering
+            filter_results = asyncio.run(
+                quality_filter.filter_chunks_batch_async(
+                    all_chunks,
+                    config.prompts.content_quality_check,
+                    config.prompts.image_quality_check,
+                    batch_size=config.generation.llm_batch_size,
+                    max_concurrent=config.generation.llm_concurrency,
+                    progress_callback=update_filter_progress,
+                )
+            )
+
+            # Extract filtered chunks
+            filtered_chunks = [chunk for chunk, passed in filter_results if passed]
+
+    total_images_after = sum(len(chunk.images) for chunk in filtered_chunks)
+
+    # Save filtered chunks
+    with open(output_file, "wb") as f:
+        pickle.dump(filtered_chunks, f)
+
+    # Save summary
+    summary = {
+        "chunks_before": len(all_chunks),
+        "chunks_after": len(filtered_chunks),
+        "chunks_removed": len(all_chunks) - len(filtered_chunks),
+        "images_before": total_images_before,
+        "images_after": total_images_after,
+        "filter_rate": 1 - (len(filtered_chunks) / len(all_chunks)) if all_chunks else 0,
+    }
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    # Display results
+    table = Table(title="Filtering Complete")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="green", justify="right")
+    table.add_row("Chunks Before", str(len(all_chunks)))
+    table.add_row("Chunks After", str(len(filtered_chunks)))
+    table.add_row("Chunks Removed", str(len(all_chunks) - len(filtered_chunks)))
+    table.add_row("Images Before", str(total_images_before))
+    table.add_row("Images After", str(total_images_after))
+
+    console.print("\n")
+    console.print(table)
+    console.print(f"[green]✓ Saved to: {output_dir}[/green]")
+
+
+def classify(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+):
+    """Step 5: Classify chunks into categories."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 5: Category Classification[/bold cyan]\n"
+            "Classify chunks into knowledge categories",
+            title="Classify",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    # Load chunks (prefer filtered, fallback to unfiltered)
+    filtered_dir = Path(config.dataset.parsed_dir).parent / "filtered"
+    chunks_dir = Path(config.dataset.parsed_dir).parent / "chunks"
+
+    if (filtered_dir / "chunks.pkl").exists():
+        input_file = filtered_dir / "chunks.pkl"
+        console.print("[cyan]Loading filtered chunks[/cyan]")
+    elif (chunks_dir / "chunks.pkl").exists():
+        input_file = chunks_dir / "chunks.pkl"
+        console.print("[cyan]Loading unfiltered chunks[/cyan]")
+    else:
+        console.print("[red]✗ No chunks found. Run 'chunk' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(input_file, "rb") as f:
+        all_chunks = pickle.load(f)
+
+    console.print(f"[cyan]Loaded {len(all_chunks)} chunks[/cyan]")
+
+    # Setup output
+    output_dir = Path(config.dataset.parsed_dir).parent / "classified"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check cache
+    output_file = output_dir / "chunks_by_category.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Classifications already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-classify[/yellow]")
+        return
+
+    # Classify chunks using batch processing
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Classifying chunks...", total=len(all_chunks))
+        
+        # Progress callback
+        def update_classify_progress(completed):
+            progress.update(task, completed=completed)
+        
+        with ModelRegistry(config.models) as model_registry:
+            question_client = model_registry.get_llm_client(config.generation.question_model)
+            category_manager = CategoryManager(config.categories, question_client)
+
+            console.print(
+                f"[cyan]Batch size={config.generation.llm_batch_size}, "
+                f"concurrency={config.generation.llm_concurrency}[/cyan]"
+            )
+
+            # organize_by_category now uses batch processing internally
+            chunks_by_category = category_manager.organize_by_category(
+                all_chunks,
+                config.prompts.category_classification,
+                batch_size=config.generation.llm_batch_size,
+                max_concurrent=config.generation.llm_concurrency,
+                progress_callback=update_classify_progress,
+            )
+
+    # Save classified chunks
+    with open(output_file, "wb") as f:
+        pickle.dump(chunks_by_category, f)
+
+    # Save summary
+    summary = {
+        "total_chunks": len(all_chunks),
+        "total_categories": len(chunks_by_category),
+        "distribution": {
+            category: len(chunks)
+            for category, chunks in sorted(
+                chunks_by_category.items(), key=lambda x: len(x[1]), reverse=True
+            )
+        },
+    }
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    # Display results
+    table = Table(title="Classification Complete")
+    table.add_column("Category", style="cyan")
+    table.add_column("Chunks", style="green", justify="right")
+
+    for category, chunks in sorted(
+        chunks_by_category.items(), key=lambda x: len(x[1]), reverse=True
+    ):
+        if len(chunks) > 0:
+            table.add_row(category, str(len(chunks)))
+
+    console.print("\n")
+    console.print(table)
+    console.print(f"[green]✓ Saved to: {output_dir}[/green]")
+
+
+def generate(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+):
+    """Step 6: Generate synthetic Q&A samples."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 6: Sample Generation[/bold cyan]\n"
+            "Generate synthetic Q&A samples from chunks",
+            title="Generate",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    # Load classified chunks
+    classified_dir = Path(config.dataset.parsed_dir).parent / "classified"
+    input_file = classified_dir / "chunks_by_category.pkl"
+
+    if not input_file.exists():
+        console.print("[red]✗ No classified chunks found. Run 'classify' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(input_file, "rb") as f:
+        chunks_by_category = pickle.load(f)
+
+    total_chunks = sum(len(chunks) for chunks in chunks_by_category.values())
+    console.print(
+        f"[cyan]Loaded {total_chunks} chunks in {len(chunks_by_category)} categories[/cyan]"
+    )
+
+    # Setup output
+    output_dir = Path(config.dataset.generated_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check cache
+    output_file = output_dir / "samples.pkl"
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Samples already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-generate[/yellow]")
+        return
+
+    # Generate samples
+    console.print(f"[cyan]Target: {config.generation.target_samples} samples[/cyan]")
+    console.print(
+        f"[cyan]Using batch_size={config.generation.llm_batch_size}, "
+        f"concurrency={config.generation.llm_concurrency}[/cyan]"
+    )
+    console.print("[cyan]Generation pipeline: Question → Answer → Quality Filter[/cyan]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        # Create tasks for each substep (will update totals dynamically)
+        questions_task = progress.add_task("Generating questions...", total=None)
+        answers_task = progress.add_task("Generating answers...", total=None)
+        curation_task = progress.add_task("Quality filtering...", total=None)
+
+        # Progress callbacks to update progress bars
+        def set_questions_total(total):
+            progress.update(questions_task, total=total)
+
+        def update_question_progress(completed):
+            progress.update(questions_task, completed=completed)
+
+        def set_answers_total(total):
+            progress.update(answers_task, total=total)
+
+        def update_answer_progress(completed):
+            progress.update(answers_task, completed=completed)
+
+        def set_curation_total(total):
+            progress.update(curation_task, total=total)
+
+        def update_curation_progress(completed):
+            progress.update(curation_task, completed=completed)
+
+        progress_callbacks = {
+            "set_questions_total": set_questions_total,
+            "questions": update_question_progress,
+            "set_answers_total": set_answers_total,
+            "answers": update_answer_progress,
+            "set_curation_total": set_curation_total,
+            "curation": update_curation_progress,
+        }
+
+        with ModelRegistry(config.models) as model_registry:
+            category_manager = CategoryManager(
+                config.categories, model_registry.get_llm_client(config.generation.question_model)
+            )
+
+            pipeline = GenerationPipeline(config, model_registry, category_manager)
+            samples = pipeline.generate_samples(chunks_by_category, progress_callbacks)
+
+    console.print()  # New line after progress bars
+    
+    # Save samples
+    with open(output_file, "wb") as f:
+        pickle.dump(samples, f)
+
+    # Save JSONL for inspection
+    with open(output_dir / "samples.jsonl", "w") as f:
         for sample in samples:
             json.dump(
                 {
                     "question": sample.question,
                     "answer": sample.answer,
                     "category": sample.category,
-                    "type": sample.question_type,
-                    "source": sample.source_path,
+                    "question_type": sample.question_type,
+                    "difficulty": sample.difficulty,
+                    "has_image": sample.image_path is not None,
+                    "image_path": sample.image_path,
+                    "source_path": sample.source_path,
                 },
                 f,
             )
             f.write("\n")
 
-    console.print(f"Samples saved to {generated_dir}")
+    # Save summary
+    summary = {
+        "total_samples": len(samples),
+        "multimodal_samples": sum(1 for s in samples if s.image_path),
+        "text_only_samples": sum(1 for s in samples if not s.image_path),
+        "by_type": {},
+        "by_category": {},
+        "by_difficulty": {},
+    }
 
-    # Stage 5: Build dataset
-    console.print("[bold]Stage 5: Building dataset splits[/bold]")
-    builder = DatasetBuilder(config.dataset, config.seed)
+    for sample in samples:
+        summary["by_type"][sample.question_type] = (
+            summary["by_type"].get(sample.question_type, 0) + 1
+        )
+        summary["by_category"][sample.category] = summary["by_category"].get(sample.category, 0) + 1
+        summary["by_difficulty"][sample.difficulty] = (
+            summary["by_difficulty"].get(sample.difficulty, 0) + 1
+        )
 
-    train_samples, val_samples, test_samples = builder.stratified_build(samples)
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
 
-    # Display split summary
-    split_summary = Table(title="Stage 5 Summary - Dataset Splits")
-    split_summary.add_column("Split", style="cyan")
-    split_summary.add_column("Samples", style="green", justify="right")
-    split_summary.add_column("Percentage", style="yellow", justify="right")
-    split_summary.add_row(
-        "Train", str(len(train_samples)), f"{len(train_samples)/len(samples):.1%}"
-    )
-    split_summary.add_row(
-        "Validation", str(len(val_samples)), f"{len(val_samples)/len(samples):.1%}"
-    )
-    split_summary.add_row("Test", str(len(test_samples)), f"{len(test_samples)/len(samples):.1%}")
-    console.print(split_summary)
-    console.print()
+    # Display results
+    table = Table(title="Generation Complete")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green", justify="right")
+    table.add_row("Total Samples", str(len(samples)))
+    table.add_row("Multimodal", str(summary["multimodal_samples"]))
+    table.add_row("Text-only", str(summary["text_only_samples"]))
 
-    # Stage 6: Export
-    console.print("[bold]Stage 6: Exporting dataset[/bold]")
-    exporter = HuggingFaceExporter(config.dataset)
-
-    dataset_dict = exporter.export(train_samples, val_samples, test_samples)
-    output_path = exporter.save_to_disk(dataset_dict)
-
-    # Final summary
     console.print("\n")
+    console.print(table)
+
+    # Show distribution by type
+    type_table = Table(title="By Question Type")
+    type_table.add_column("Type", style="cyan")
+    type_table.add_column("Count", style="green", justify="right")
+    for qtype, count in sorted(summary["by_type"].items()):
+        type_table.add_row(qtype, str(count))
+
+    console.print("\n")
+    console.print(type_table)
+    console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
+
+
+def build(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+):
+    """Step 7: Build train/val/test splits."""
     console.print(
         Panel.fit(
-            f"[bold green]✓ Dataset Generation Complete![/bold green]\n\n"
-            f"Generated: {len(samples):,} samples\n"
-            f"Multimodal: {sum(1 for s in samples if s.image_path)} ({sum(1 for s in samples if s.image_path)/len(samples):.1%})\n"
-            f"Categories: {len(chunks_by_category)}\n"
-            f"Output: {output_path}",
+            "[bold cyan]Step 7: Dataset Splits[/bold cyan]\n"
+            "Build stratified train/validation/test splits",
+            title="Build",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    # Load samples
+    generated_dir = Path(config.dataset.generated_dir)
+    input_file = generated_dir / "samples.pkl"
+
+    if not input_file.exists():
+        console.print("[red]✗ No samples found. Run 'generate' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(input_file, "rb") as f:
+        samples = pickle.load(f)
+
+    console.print(f"[cyan]Loaded {len(samples)} samples[/cyan]")
+
+    # Setup output
+    output_dir = Path(config.dataset.parsed_dir).parent / "splits"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build splits
+    builder = DatasetBuilder(config.dataset, config.seed)
+    train_samples, val_samples, test_samples = builder.stratified_build(samples)
+
+    # Save splits
+    with open(output_dir / "train.pkl", "wb") as f:
+        pickle.dump(train_samples, f)
+
+    with open(output_dir / "val.pkl", "wb") as f:
+        pickle.dump(val_samples, f)
+
+    with open(output_dir / "test.pkl", "wb") as f:
+        pickle.dump(test_samples, f)
+
+    # Save summary
+    summary = {
+        "total_samples": len(samples),
+        "train_samples": len(train_samples),
+        "val_samples": len(val_samples),
+        "test_samples": len(test_samples),
+        "train_percentage": len(train_samples) / len(samples) * 100,
+        "val_percentage": len(val_samples) / len(samples) * 100,
+        "test_percentage": len(test_samples) / len(samples) * 100,
+    }
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    # Display results
+    table = Table(title="Dataset Splits")
+    table.add_column("Split", style="cyan")
+    table.add_column("Samples", style="green", justify="right")
+    table.add_column("Percentage", style="yellow", justify="right")
+
+    table.add_row("Train", str(len(train_samples)), f"{summary['train_percentage']:.1f}%")
+    table.add_row("Validation", str(len(val_samples)), f"{summary['val_percentage']:.1f}%")
+    table.add_row("Test", str(len(test_samples)), f"{summary['test_percentage']:.1f}%")
+
+    console.print("\n")
+    console.print(table)
+    console.print(f"[green]✓ Saved to: {output_dir}[/green]")
+
+
+def export(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    hub_id: Optional[str] = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
+    token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+):
+    """Step 8: Export dataset to HuggingFace format."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 8: Export Dataset[/bold cyan]\n"
+            "Export to HuggingFace Dataset format",
+            title="Export",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    # Load splits
+    splits_dir = Path(config.dataset.parsed_dir).parent / "splits"
+
+    if not all((splits_dir / f"{split}.pkl").exists() for split in ["train", "val", "test"]):
+        console.print("[red]✗ No splits found. Run 'build' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(splits_dir / "train.pkl", "rb") as f:
+        train_samples = pickle.load(f)
+
+    with open(splits_dir / "val.pkl", "rb") as f:
+        val_samples = pickle.load(f)
+
+    with open(splits_dir / "test.pkl", "rb") as f:
+        test_samples = pickle.load(f)
+
+    console.print(
+        f"[cyan]Loaded splits: train={len(train_samples)}, "
+        f"val={len(val_samples)}, test={len(test_samples)}[/cyan]"
+    )
+
+    # Export to HuggingFace format
+    exporter = HuggingFaceExporter(config.dataset)
+    dataset_dict = exporter.export(train_samples, val_samples, test_samples)
+
+    # Save to disk
+    output_path = exporter.save_to_disk(dataset_dict)
+    console.print(f"[green]✓ Saved dataset to: {output_path}[/green]")
+
+    # Push to hub if requested
+    if hub_id:
+        console.print(f"\n[cyan]Pushing to HuggingFace Hub: {hub_id}[/cyan]")
+
+        # Filter out empty splits to avoid HuggingFace push_to_hub bug
+        from datasets import DatasetDict
+
+        non_empty_dict = DatasetDict(
+            {split: dataset for split, dataset in dataset_dict.items() if len(dataset) > 0}
+        )
+
+        if non_empty_dict:
+            non_empty_dict.push_to_hub(
+                hub_id,
+                token=token,
+                private=False,
+            )
+            console.print(
+                f"[green]✓ Dataset available at: https://huggingface.co/datasets/{hub_id}[/green]"
+            )
+
+            # Report which splits were pushed
+            pushed_splits = list(non_empty_dict.keys())
+            empty_splits = [s for s in dataset_dict.keys() if s not in pushed_splits]
+            if empty_splits:
+                console.print(
+                    f"[yellow]Note: Empty splits not pushed: {', '.join(empty_splits)}[/yellow]"
+                )
+        else:
+            console.print("[yellow]⚠ All splits are empty, cannot push to hub[/yellow]")
+
+    # Display final summary
+    table = Table(title="Export Complete")
+    table.add_column("Split", style="cyan")
+    table.add_column("Samples", style="green", justify="right")
+
+    for split in dataset_dict.keys():
+        table.add_row(split, str(len(dataset_dict[split])))
+
+    console.print("\n")
+    console.print(table)
+
+
+def pipeline(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+    hub_id: Optional[str] = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
+    token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+):
+    """Run the complete pipeline: parse -> transcribe -> chunk -> filter -> classify -> generate -> build -> export."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Complete Pipeline[/bold cyan]\nRunning all steps sequentially",
+            title="Full Pipeline",
+        )
+    )
+
+    import time
+
+    start_time = time.time()
+
+    steps = [
+        ("Parse", lambda: parse(config_path, no_cache, False)),
+        ("Transcribe", lambda: transcribe(config_path, no_cache)),
+        ("Chunk", lambda: chunk(config_path, no_cache)),
+        ("Filter", lambda: filter_quality(config_path, no_cache)),
+        ("Classify", lambda: classify(config_path, no_cache)),
+        ("Generate", lambda: generate(config_path, no_cache)),
+        ("Build", lambda: build(config_path)),
+        ("Export", lambda: export(config_path, hub_id, token)),
+    ]
+
+    for i, (step_name, step_func) in enumerate(steps, 1):
+        console.print(f"\n[bold]━━━ Step {i}/8: {step_name} ━━━[/bold]\n")
+        try:
+            step_func()
+        except Exception as e:
+            console.print(f"\n[red]✗ Pipeline failed at step {step_name}: {e}[/red]")
+            raise
+
+    elapsed = time.time() - start_time
+    minutes = int(elapsed // 60)
+    seconds = int(elapsed % 60)
+
+    console.print(
+        Panel.fit(
+            f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
+            f"All 8 steps completed successfully\n"
+            f"Total time: {minutes}m {seconds}s",
             title="Success",
             border_style="green",
         )
     )
-    console.print()
-
-
-def export(
-    dataset_path: Path = typer.Option(..., "--dataset", "-d", help="Dataset directory"),
-    hub_id: str = typer.Option(..., "--hub-id", "-h", help="HuggingFace Hub ID"),
-    token: str | None = typer.Option(None, "--token", "-t", help="HuggingFace token"),
-):
-    """Export dataset to HuggingFace Hub."""
-    console.print("[bold cyan]Exporting to HuggingFace Hub[/bold cyan]\n")
-
-    from datasets import load_from_disk
-
-    console.print(f"Loading dataset from {dataset_path}...")
-    dataset_dict = load_from_disk(str(dataset_path))
-
-    console.print(f"Pushing to {hub_id}...")
-
-    dataset_dict.push_to_hub(
-        hub_id,
-        token=token,
-        private=False,
-    )
-
-    console.print(f"\n[green]✓ Dataset exported successfully![/green]")
-    console.print(f"[green]  Hub: https://huggingface.co/datasets/{hub_id}[/green]\n")
