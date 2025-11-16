@@ -26,14 +26,6 @@ class QuestionType(str, Enum):
     SUMMARY = "summary"
 
 
-class DifficultyLevel(str, Enum):
-    """Difficulty level for generated samples."""
-
-    EASY = "easy"
-    MEDIUM = "medium"
-    HARD = "hard"
-
-
 class SourceConfig(BaseModel):
     """Configuration for a documentation source."""
 
@@ -50,7 +42,6 @@ class CategoryConfig(BaseModel):
 
     name: str
     description: str = ""
-    weight: float = Field(default=1.0, ge=0.0)
 
 
 class ModelEndpoint(BaseModel):
@@ -121,9 +112,6 @@ class GenerationConfig(BaseModel):
 
     question_types: list[QuestionType] = Field(default_factory=lambda: list(QuestionType))
     question_type_weights: dict[QuestionType, float] = Field(default_factory=dict)
-
-    difficulty_levels: list[DifficultyLevel] = Field(default_factory=lambda: list(DifficultyLevel))
-    difficulty_weights: dict[DifficultyLevel, float] = Field(default_factory=dict)
 
     max_context_length: int = Field(default=2048, ge=1)
     chunk_overlap: int = Field(default=200, ge=0)

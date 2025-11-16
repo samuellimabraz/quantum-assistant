@@ -58,12 +58,11 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
     console.print("\n[bold]Categories:[/bold]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Name", style="cyan")
-    table.add_column("Weight", justify="right")
     table.add_column("Description", style="dim")
 
     for cat in config.categories:
         desc = cat.description[:50] + "..." if len(cat.description) > 50 else cat.description
-        table.add_row(cat.name, f"{cat.weight:.1f}", desc)
+        table.add_row(cat.name, desc)
 
     console.print(table)
 

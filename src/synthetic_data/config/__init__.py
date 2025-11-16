@@ -3,7 +3,6 @@
 from .schema import (
     CategoryConfig,
     DatasetConfig,
-    DifficultyLevel,
     GenerationConfig,
     ModelConfig,
     ModelEndpoint,
@@ -17,7 +16,6 @@ from .schema import (
 __all__ = [
     "CategoryConfig",
     "DatasetConfig",
-    "DifficultyLevel",
     "GenerationConfig",
     "ModelConfig",
     "ModelEndpoint",

@@ -117,9 +117,7 @@ class HuggingFaceExporter:
                 "answer": Value("string"),
                 "category": Value("string"),
                 "type": Value("string"),
-                "difficulty": Value("string"),
                 "image": Image(),
-                "has_image": Value("bool"),
                 "source": Value("string"),
             }
         )
@@ -130,11 +128,9 @@ class HuggingFaceExporter:
             "question": [],
             "answer": [],
             "category": [],
-            "type": [],  
-            "difficulty": [],  
+            "type": [],
             "image": [],
-            "has_image": [],
-            "source": [], 
+            "source": [],
         }
 
         for sample in samples:
@@ -143,8 +139,6 @@ class HuggingFaceExporter:
             data["answer"].append(sample.answer or "")
             data["category"].append(sample.category or "uncategorized")
             data["type"].append(sample.question_type or "qa")
-            data["difficulty"].append(sample.difficulty or "medium")
-            data["has_image"].append(sample.image_path is not None)
 
             # Convert source path to relative path
             source_relative = self._make_relative_path(sample.source_path)
@@ -254,7 +248,7 @@ class HuggingFaceExporter:
         test_count = len(dataset_dict["test"])
         total_count = train_count + val_count + test_count
 
-        multimodal_count = sum(1 for sample in dataset_dict["train"] if sample["has_image"])
+        multimodal_count = sum(1 for sample in dataset_dict["train"] if sample["image"] is not None)
 
         card_content = f"""---
 license: {self.config.license}
@@ -296,9 +290,7 @@ The dataset was generated from official Qiskit documentation and learning materi
     "answer": str,             # The answer or response
     "category": str,           # Knowledge category (e.g., quantum_ml_optimization)
     "type": str,               # Type of question (qa, code, caption, summary)
-    "difficulty": str,         # Difficulty level (easy, medium, hard)
     "image": PIL.Image,        # Image (if multimodal, else None)
-    "has_image": bool,         # Whether sample includes image
     "source": str,             # Relative source document path
 }}
 ```
@@ -316,11 +308,8 @@ train_data = dataset["train"]
 # Filter by category
 quantum_ml = train_data.filter(lambda x: x["category"] == "quantum_ml_optimization")
 
-# Filter by difficulty
-hard_questions = train_data.filter(lambda x: x["difficulty"] == "hard")
-
 # Get multimodal samples only
-multimodal = train_data.filter(lambda x: x["has_image"])
+multimodal = train_data.filter(lambda x: x["image"] is not None)
 
 # Filter by question type
 code_questions = train_data.filter(lambda x: x["type"] == "code")

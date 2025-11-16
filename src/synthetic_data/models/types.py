@@ -11,7 +11,6 @@ class Sample:
     answer: str
     category: str
     question_type: str
-    difficulty: str = "medium"
 
     image_path: str | None = None
     source_path: str | None = None
