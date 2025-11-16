@@ -1,5 +1,7 @@
 """Category management and classification."""
 
+import asyncio
+
 from synthetic_data.config import CategoryConfig
 from synthetic_data.extractors.chunker import Chunk
 from synthetic_data.models import LLMClient, Message
@@ -118,23 +120,120 @@ class CategoryManager:
 
         return distribution
 
+    async def classify_chunks_batch_async(
+        self,
+        chunks: list[Chunk],
+        prompt_template: str,
+        batch_size: int = 32,
+        max_concurrent: int = 10,
+        progress_callback=None,
+    ) -> list[str]:
+        """
+        Classify multiple chunks in batch using async processing.
+
+        Args:
+            chunks: List of content chunks to classify
+            prompt_template: Prompt template for LLM classification
+            batch_size: Size of batches for processing
+            max_concurrent: Maximum concurrent LLM requests
+            progress_callback: Optional callback function(completed_count) for progress tracking
+
+        Returns:
+            List of category names corresponding to each chunk
+        """
+        if not self.llm_client:
+            return [self._keyword_classify(chunk) for chunk in chunks]
+
+        categories_desc = "\n".join(
+            [f"- {name}: {cat.description}" for name, cat in self.categories.items()]
+        )
+
+        # Prepare all classification prompts
+        all_messages = []
+        for chunk in chunks:
+            user_prompt = prompt_template.format(
+                categories=categories_desc,
+                content=chunk.text[:1500],
+            )
+            messages = [
+                Message(
+                    role="system",
+                    content="Reasoning: low. You are a content classifier. Return only the category name.",
+                ),
+                Message(role="user", content=user_prompt),
+            ]
+            all_messages.append(messages)
+
+        # Classify in batch
+        responses = await self.llm_client.generate_batch_async(
+            all_messages,
+            max_concurrent=max_concurrent,
+            temperature=0.1,
+            max_tokens=500,
+            progress_callback=progress_callback,
+        )
+
+        # Parse and validate responses
+        categories = []
+        for i, response in enumerate(responses):
+            category = response.strip().lower().replace("-", "_").replace(" ", "_")
+            if category in self.categories:
+                categories.append(category)
+            else:
+                categories.append(self._keyword_classify(chunks[i]))
+
+        return categories
+
     def organize_by_category(
-        self, chunks: list[Chunk], prompt_template: str | None = None
+        self,
+        chunks: list[Chunk],
+        prompt_template: str | None = None,
+        batch_size: int = 32,
+        max_concurrent: int = 10,
+        progress_callback=None,
     ) -> dict[str, list[Chunk]]:
         """
-        Organize chunks by category.
+        Organize chunks by category using batch classification.
 
         Args:
             chunks: List of content chunks
             prompt_template: Optional prompt template for classification
+            batch_size: Size of batches for processing
+            max_concurrent: Maximum concurrent LLM requests
+            progress_callback: Optional callback function(completed_count) for progress tracking
 
         Returns:
             Dict mapping category names to lists of chunks
         """
         organized = {name: [] for name in self.categories}
 
-        for chunk in chunks:
-            category = self.classify_chunk(chunk, prompt_template)
-            organized[category].append(chunk)
+        if self.llm_client and prompt_template:
+            categories = asyncio.run(
+                self._classify_and_cleanup_async(
+                    chunks, prompt_template, batch_size, max_concurrent, progress_callback
+                )
+            )
+            for chunk, category in zip(chunks, categories):
+                organized[category].append(chunk)
+        else:
+            for chunk in chunks:
+                category = self._keyword_classify(chunk)
+                organized[category].append(chunk)
 
         return organized
+
+    async def _classify_and_cleanup_async(
+        self,
+        chunks: list[Chunk],
+        prompt_template: str,
+        batch_size: int,
+        max_concurrent: int,
+        progress_callback=None,
+    ) -> list[str]:
+        """Classify chunks and cleanup async client."""
+        categories = await self.classify_chunks_batch_async(
+            chunks, prompt_template, batch_size, max_concurrent, progress_callback
+        )
+        if self.llm_client:
+            await self.llm_client.aclose()
+        return categories
