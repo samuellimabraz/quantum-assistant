@@ -246,11 +246,11 @@ def transcribe(
         console=console,
     ) as progress:
         task = progress.add_task("Transcribing images...", total=images_to_transcribe)
-        
+
         # Progress callback
         def update_transcription_progress(completed):
             progress.update(task, completed=completed)
-        
+
         with ModelRegistry(config.models) as model_registry:
             try:
                 vision_client = model_registry.get_vlm_client(config.generation.vision_model)
@@ -485,11 +485,11 @@ def filter_quality(
         console=console,
     ) as progress:
         task = progress.add_task("Filtering chunks...", total=len(all_chunks))
-        
+
         # Progress callback
         def update_filter_progress(completed):
             progress.update(task, completed=completed)
-        
+
         with ModelRegistry(config.models) as model_registry:
             question_client = model_registry.get_llm_client(config.generation.question_model)
             quality_filter = QualityFilter(question_client)
@@ -605,11 +605,11 @@ def classify(
         console=console,
     ) as progress:
         task = progress.add_task("Classifying chunks...", total=len(all_chunks))
-        
+
         # Progress callback
         def update_classify_progress(completed):
             progress.update(task, completed=completed)
-        
+
         with ModelRegistry(config.models) as model_registry:
             question_client = model_registry.get_llm_client(config.generation.question_model)
             category_manager = CategoryManager(config.categories, question_client)
@@ -763,7 +763,7 @@ def generate(
             samples = pipeline.generate_samples(chunks_by_category, progress_callbacks)
 
     console.print()  # New line after progress bars
-    
+
     # Save samples
     with open(output_file, "wb") as f:
         pickle.dump(samples, f)
@@ -777,8 +777,6 @@ def generate(
                     "answer": sample.answer,
                     "category": sample.category,
                     "question_type": sample.question_type,
-                    "difficulty": sample.difficulty,
-                    "has_image": sample.image_path is not None,
                     "image_path": sample.image_path,
                     "source_path": sample.source_path,
                 },
@@ -793,7 +791,6 @@ def generate(
         "text_only_samples": sum(1 for s in samples if not s.image_path),
         "by_type": {},
         "by_category": {},
-        "by_difficulty": {},
     }
 
     for sample in samples:
@@ -801,9 +798,6 @@ def generate(
             summary["by_type"].get(sample.question_type, 0) + 1
         )
         summary["by_category"][sample.category] = summary["by_category"].get(sample.category, 0) + 1
-        summary["by_difficulty"][sample.difficulty] = (
-            summary["by_difficulty"].get(sample.difficulty, 0) + 1
-        )
 
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
