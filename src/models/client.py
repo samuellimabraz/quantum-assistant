@@ -98,6 +98,12 @@ class LLMClient:
         temperature: float | None = None,
     ) -> str:
         """Generate text completion asynchronously with retry logic."""
+        try:
+            if self.async_client.is_closed:
+                self.async_client = httpx.AsyncClient(timeout=self.timeout)
+        except AttributeError:
+            pass
+
         url = f"{self.base_url}/chat/completions"
 
         headers = {"Content-Type": "application/json"}
@@ -132,6 +138,7 @@ class LLMClient:
         max_tokens: int | None = None,
         temperature: float | None = None,
         max_concurrent: int = 10,
+        progress_callback=None,
     ) -> list[str]:
         """
         Generate completions for multiple inputs concurrently.
@@ -141,18 +148,30 @@ class LLMClient:
             max_tokens: Override max tokens
             temperature: Override temperature
             max_concurrent: Maximum concurrent requests
+            progress_callback: Optional callback function(completed_count) called after each completion
 
         Returns:
             List of generated texts
         """
         semaphore = asyncio.Semaphore(max_concurrent)
+        completed_count = 0
+        results = [None] * len(batch)
+        lock = asyncio.Lock()
 
-        async def generate_with_limit(messages):
+        async def generate_with_limit(idx, messages):
+            nonlocal completed_count
             async with semaphore:
-                return await self.generate_async(messages, max_tokens, temperature)
+                result = await self.generate_async(messages, max_tokens, temperature)
+                async with lock:
+                    results[idx] = result
+                    completed_count += 1
+                    if progress_callback:
+                        progress_callback(completed_count)
+                return result
 
-        tasks = [generate_with_limit(messages) for messages in batch]
-        return await asyncio.gather(*tasks)
+        tasks = [generate_with_limit(i, messages) for i, messages in enumerate(batch)]
+        await asyncio.gather(*tasks)
+        return results
 
     def generate_batch(
         self,
@@ -165,6 +184,10 @@ class LLMClient:
         return asyncio.run(
             self.generate_batch_async(batch, max_tokens, temperature, max_concurrent)
         )
+
+    async def aclose(self):
+        """Close async HTTP client."""
+        await self.async_client.aclose()
 
     def close(self):
         """Close HTTP clients."""
@@ -279,6 +302,7 @@ class VLMClient(LLMClient):
         max_tokens: int | None = None,
         temperature: float | None = None,
         max_concurrent: int = 8,
+        progress_callback=None,
     ) -> list[str]:
         """
         Generate completions for multiple image+text inputs concurrently.
@@ -288,20 +312,32 @@ class VLMClient(LLMClient):
             max_tokens: Override max tokens
             temperature: Override temperature
             max_concurrent: Maximum concurrent requests (lower for VLM)
+            progress_callback: Optional callback function(completed_count) called after each completion
 
         Returns:
             List of generated texts
         """
         semaphore = asyncio.Semaphore(max_concurrent)
+        completed_count = 0
+        results = [None] * len(prompts)
+        lock = asyncio.Lock()
 
-        async def generate_with_limit(text, image_path):
+        async def generate_with_limit(idx, text, image_path):
+            nonlocal completed_count
             async with semaphore:
-                return await self.generate_with_image_async(
+                result = await self.generate_with_image_async(
                     text, image_path, max_tokens, temperature
                 )
+                async with lock:
+                    results[idx] = result
+                    completed_count += 1
+                    if progress_callback:
+                        progress_callback(completed_count)
+                return result
 
-        tasks = [generate_with_limit(text, img) for text, img in prompts]
-        return await asyncio.gather(*tasks)
+        tasks = [generate_with_limit(i, text, img) for i, (text, img) in enumerate(prompts)]
+        await asyncio.gather(*tasks)
+        return results
 
     def generate_batch_with_images(
         self,

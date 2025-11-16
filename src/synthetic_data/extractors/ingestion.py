@@ -88,18 +88,16 @@ class DocumentIngestion:
 
         return documents
 
-    def _parse_file(self, path: Path) -> Document | None:
-        """Parse a single file."""
+    def parse_file(self, path: Path) -> Document | None:
+        """Parse a single file (public interface)."""
         for parser in self.parsers:
             if parser.can_parse(path):
                 try:
                     doc = parser.parse(path)
                     if doc:
                         if self.image_resolver:
-                            self._resolve_document_images(doc)
-
-                        if self.image_transcriber:
-                            self._transcribe_document_images(doc)
+                            self.resolve_document_images(doc)
+                        # Note: Transcription is done separately in batch after parsing
 
                     return doc
                 except Exception as e:
@@ -107,19 +105,23 @@ class DocumentIngestion:
                     return None
         return None
 
-    def _resolve_document_images(self, document: Document):
-        """Resolve all image paths in a document."""
+    def _parse_file(self, path: Path) -> Document | None:
+        """Parse a single file (backward compatibility)."""
+        return self.parse_file(path)
+
+    def resolve_document_images(self, document: Document):
+        """Resolve all image paths in a document (public interface)."""
         for img_ref in document.images:
             resolved = self.image_resolver.resolve_image_path(img_ref.path, document.source_path)
             if resolved:
                 img_ref.resolved_path = str(resolved)
 
-    def _transcribe_document_images(self, document: Document):
-        """Transcribe all images in a document using VLM."""
-        self.image_transcriber.transcribe_document_images(document)
+    def _resolve_document_images(self, document: Document):
+        """Resolve all image paths in a document (backward compatibility)."""
+        self.resolve_document_images(document)
 
-    def _should_include(self, path: Path, source: SourceConfig) -> bool:
-        """Check if file should be included based on patterns."""
+    def should_include(self, path: Path, source: SourceConfig) -> bool:
+        """Check if file should be included based on patterns (public interface)."""
         path_str = str(path)
 
         # Check exclude patterns
@@ -130,3 +132,7 @@ class DocumentIngestion:
                 return False
 
         return True
+
+    def _should_include(self, path: Path, source: SourceConfig) -> bool:
+        """Check if file should be included (backward compatibility)."""
+        return self.should_include(path, source)
