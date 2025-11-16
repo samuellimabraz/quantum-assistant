@@ -47,12 +47,15 @@ class ImageTranscriber:
                     print(f"Warning: Failed to transcribe {img_ref.path}: {e}")
                     img_ref.transcription = None
 
-    async def transcribe_document_images_async(self, document: Document) -> None:
+    async def transcribe_document_images_async(
+        self, document: Document, progress_callback=None
+    ) -> None:
         """
         Transcribe all images in a document in-place using async batching.
 
         Args:
             document: Document with images to transcribe
+            progress_callback: Optional callback function(completed_count) for progress tracking
         """
         images_to_transcribe = [img for img in document.images if img.resolved_path]
 
@@ -74,30 +77,22 @@ class ImageTranscriber:
         if not prompts_and_images:
             return
 
-        # Process in batches
-        for i in range(0, len(prompts_and_images), self.batch_size):
-            batch = prompts_and_images[i : i + self.batch_size]
-            batch_prompts = [(prompt, img_path) for _, prompt, img_path in batch]
+        # Collect all prompts for single batch call
+        batch_prompts = [(prompt, img_path) for _, prompt, img_path in prompts_and_images]
 
-            try:
-                transcriptions = await self.vlm_client.generate_batch_with_images_async(
-                    batch_prompts, max_concurrent=self.max_concurrent
-                )
+        try:
+            transcriptions = await self.vlm_client.generate_batch_with_images_async(
+                batch_prompts,
+                max_concurrent=self.max_concurrent,
+                progress_callback=progress_callback,
+            )
 
-                # Assign transcriptions back to image references
-                for j, transcription in enumerate(transcriptions):
-                    img_ref = batch[j][0]
-                    img_ref.transcription = transcription.strip()
-            except Exception as e:
-                print(f"Warning: Batch transcription failed: {e}")
-                # Fall back to individual processing for this batch
-                for img_ref, prompt, img_path in batch:
-                    try:
-                        transcription = self._transcribe_image(img_ref)
-                        img_ref.transcription = transcription
-                    except Exception as e2:
-                        print(f"Warning: Failed to transcribe {img_ref.path}: {e2}")
-                        img_ref.transcription = None
+            # Assign transcriptions back to image references
+            for i, transcription in enumerate(transcriptions):
+                img_ref = prompts_and_images[i][0]
+                img_ref.transcription = transcription.strip()
+        except Exception as e:
+            print(f"Warning: Batch transcription failed: {e}")
 
     def transcribe_batch_documents(self, documents: list[Document]) -> None:
         """
@@ -108,15 +103,50 @@ class ImageTranscriber:
         """
         asyncio.run(self.transcribe_batch_documents_async(documents))
 
-    async def transcribe_batch_documents_async(self, documents: list[Document]) -> None:
+    async def transcribe_batch_documents_async(
+        self, documents: list[Document], progress_callback=None
+    ) -> None:
         """
         Transcribe images across multiple documents using async batching.
 
         Args:
             documents: List of documents with images to transcribe
+            progress_callback: Optional callback function(completed_count) for progress tracking
         """
-        tasks = [self.transcribe_document_images_async(doc) for doc in documents]
-        await asyncio.gather(*tasks)
+        # Collect all images from all documents
+        all_prompts_and_images = []
+        
+        for doc in documents:
+            images_to_transcribe = [img for img in doc.images if img.resolved_path]
+            for img_ref in images_to_transcribe:
+                try:
+                    prompt = self._prepare_prompt(img_ref)
+                    image_path = Path(img_ref.resolved_path).resolve()
+                    if image_path.exists():
+                        all_prompts_and_images.append((img_ref, prompt, image_path))
+                except Exception as e:
+                    print(f"Warning: Failed to prepare image {img_ref.path}: {e}")
+                    img_ref.transcription = None
+
+        if not all_prompts_and_images:
+            return
+
+        # Transcribe all images in one batch
+        batch_prompts = [(prompt, img_path) for _, prompt, img_path in all_prompts_and_images]
+        
+        try:
+            transcriptions = await self.vlm_client.generate_batch_with_images_async(
+                batch_prompts,
+                max_concurrent=self.max_concurrent,
+                progress_callback=progress_callback,
+            )
+
+            # Assign transcriptions back to image references
+            for i, transcription in enumerate(transcriptions):
+                img_ref = all_prompts_and_images[i][0]
+                img_ref.transcription = transcription.strip()
+        except Exception as e:
+            print(f"Warning: Batch transcription failed: {e}")
 
     def _prepare_prompt(self, img_ref: ImageReference) -> str:
         """Prepare transcription prompt with context."""
