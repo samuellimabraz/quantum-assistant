@@ -115,7 +115,7 @@ class ImageTranscriber:
         """
         # Collect all images from all documents
         all_prompts_and_images = []
-        
+
         for doc in documents:
             images_to_transcribe = [img for img in doc.images if img.resolved_path]
             for img_ref in images_to_transcribe:
@@ -133,7 +133,7 @@ class ImageTranscriber:
 
         # Transcribe all images in one batch
         batch_prompts = [(prompt, img_path) for _, prompt, img_path in all_prompts_and_images]
-        
+
         try:
             transcriptions = await self.vlm_client.generate_batch_with_images_async(
                 batch_prompts,
