@@ -52,7 +52,7 @@ def benchmark_llm(
 
     # Grid search configurations
     batch_sizes = [5, 10, 20, 32]
-    concurrencies = [10, 20, 50, 100]
+    concurrencies = [2, 10, 20, 32]
 
     print("\n🔍 Running grid search to find optimal configuration...\n")
     results = asyncio.run(

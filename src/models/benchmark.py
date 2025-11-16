@@ -77,7 +77,7 @@ class ModelBenchmark:
             raise ValueError("Client must be LLMClient for LLM benchmarking")
 
         # Convert prompts to messages
-        message_batches = [[Message(role="user", content=p)] for p in prompts]
+        message_batches = [[Message(role="system", content="Reasoning: low. You are a helpful assistant."), Message(role="user", content=p)] for p in prompts]
 
         # Track latencies
         latencies = []
