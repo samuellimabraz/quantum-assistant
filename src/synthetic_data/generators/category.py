@@ -19,7 +19,6 @@ class CategoryManager:
             llm_client: Optional LLM client for intelligent classification
         """
         self.categories = {cat.name: cat for cat in categories}
-        self.total_weight = sum(cat.weight for cat in categories)
         self.llm_client = llm_client
 
     def classify_chunk(self, chunk: Chunk, prompt_template: str | None = None) -> str:
@@ -86,37 +85,46 @@ class CategoryManager:
                 if keyword in source_path_lower:
                     score += 5
 
-            scores[name] = score * category.weight
+            scores[name] = score
 
         if max(scores.values()) > 0:
             return max(scores, key=scores.get)
 
         return list(self.categories.keys())[0]
 
-    def get_target_distribution(self, total_samples: int) -> dict[str, int]:
+    def get_target_distribution(
+        self, total_samples: int, chunks_by_category: dict[str, list[Chunk]]
+    ) -> dict[str, int]:
         """
-        Calculate target sample distribution across categories.
+        Calculate target sample distribution across categories based on available chunks.
 
         Args:
             total_samples: Total number of samples to generate
+            chunks_by_category: Chunks organized by category
 
         Returns:
             Dict mapping category names to target sample counts
         """
+        # Calculate distribution proportional to number of chunks in each category
+        total_chunks = sum(len(chunks) for chunks in chunks_by_category.values())
+        
+        if total_chunks == 0:
+            return {name: 0 for name in self.categories}
+        
         distribution = {}
-
-        for name, category in self.categories.items():
-            proportion = category.weight / self.total_weight
+        for name in self.categories:
+            num_chunks = len(chunks_by_category.get(name, []))
+            proportion = num_chunks / total_chunks
             distribution[name] = int(total_samples * proportion)
 
-        # Adjust for rounding errors
+        # Adjust for rounding errors - give remaining samples to category with most chunks
         total_allocated = sum(distribution.values())
         if total_allocated < total_samples:
-            highest_weight_cat = max(
+            max_chunks_cat = max(
                 self.categories.keys(),
-                key=lambda k: self.categories[k].weight,
+                key=lambda k: len(chunks_by_category.get(k, [])),
             )
-            distribution[highest_weight_cat] += total_samples - total_allocated
+            distribution[max_chunks_cat] += total_samples - total_allocated
 
         return distribution
 
