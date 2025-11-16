@@ -319,7 +319,17 @@ def test_image_transcription(config: PipelineConfig):
             # Manually transcribe images for test docs (since helper bypasses transcription)
             if test_docs and transcriber:
                 console.print(f"  Transcribing images in {len(test_docs)} documents...")
-                asyncio.run(transcriber.transcribe_batch_documents_async(test_docs))
+                total_images = sum(
+                    1 for doc in test_docs for img in doc.images if img.resolved_path
+                )
+                transcribed = [0]  # Use list to avoid closure issues
+
+                def progress_cb(completed):
+                    transcribed[0] = completed
+                    console.print(f"\r  Progress: {completed}/{total_images}", end="")
+
+                asyncio.run(transcriber.transcribe_batch_documents_async(test_docs, progress_cb))
+                console.print()  # New line after progress
 
             transcribed_count = sum(
                 1 for doc in test_docs for img in doc.images if img.transcription
@@ -540,7 +550,7 @@ def test_category_classification(config: PipelineConfig):
             question_client = registry.get_llm_client(config.generation.question_model)
             category_manager = CategoryManager(config.categories, question_client)
 
-            # Classify chunks
+            # Classify chunks (no progress callback for test simplicity)
             chunks_by_category = category_manager.organize_by_category(
                 chunks[:10], config.prompts.category_classification  # Test with first 10 chunks
             )
@@ -624,7 +634,6 @@ def test_sample_generation(config: PipelineConfig):
             table.add_column("Value", style="green", justify="right")
             table.add_row("Total Samples", str(len(samples)))
             table.add_row("Multimodal Samples", str(sum(1 for s in samples if s.image_path)))
-            table.add_row("Code Samples", str(sum(1 for s in samples if s.code_context)))
 
             console.print(table)
 
@@ -641,7 +650,6 @@ def test_sample_generation(config: PipelineConfig):
                                 "question_type": sample.question_type,
                                 "difficulty": sample.difficulty,
                                 "has_image": sample.image_path is not None,
-                                "has_code": sample.code_context is not None,
                                 "source_path": sample.source_path,
                             },
                             f,
