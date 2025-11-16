@@ -60,6 +60,9 @@ class DatasetBuilder:
         Returns:
             Tuple of (train_samples, val_samples, test_samples)
         """
+        if len(samples) < 10:
+            return self.build(samples)
+
         # Group by category and question type
         groups = {}
         for sample in samples:
@@ -77,8 +80,15 @@ class DatasetBuilder:
             random.shuffle(group_samples)
 
             total = len(group_samples)
-            train_size = int(total * self.config.train_split)
-            val_size = int(total * self.config.val_split)
+
+            # Ensure at least 1 sample per split if group is large enough
+            if total >= 3:
+                train_size = max(1, int(total * self.config.train_split))
+                val_size = max(1, int(total * self.config.val_split))
+            else:
+                # For tiny groups, just add to train
+                train_samples.extend(group_samples)
+                continue
 
             train_samples.extend(group_samples[:train_size])
             val_samples.extend(group_samples[train_size : train_size + val_size])
@@ -117,7 +127,6 @@ class DatasetBuilder:
                     "category": sample.category,
                     "question_type": sample.question_type,
                     "image_path": sample.image_path,
-                    "code_context": sample.code_context,
                     "source_path": sample.source_path,
                     "metadata": sample.metadata,
                 }

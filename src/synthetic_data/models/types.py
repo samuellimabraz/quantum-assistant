@@ -14,6 +14,5 @@ class Sample:
     difficulty: str = "medium"
 
     image_path: str | None = None
-    code_context: str | None = None
     source_path: str | None = None
     metadata: dict = field(default_factory=dict)

@@ -42,7 +42,7 @@ class SourceConfig(BaseModel):
     folders: list[str] = Field(default_factory=list)  # For GitHub: specific folders to process
     include_patterns: list[str] = Field(default_factory=lambda: ["*.ipynb", "*.mdx", "*.pdf"])
     exclude_patterns: list[str] = Field(default_factory=lambda: ["**/node_modules/**"])
-    max_files: int | None = Field(default=None, ge=1) 
+    max_files: int | None = Field(default=None, ge=1)
 
 
 class CategoryConfig(BaseModel):
@@ -98,6 +98,7 @@ class PromptsConfig(BaseModel):
     image_quality_check: str
     image_transcription: str
     category_classification: str
+    qa_curation: str
 
 
 class GenerationConfig(BaseModel):
@@ -107,6 +108,7 @@ class GenerationConfig(BaseModel):
     question_model: str
     vision_model: str | None = None
     answer_model: str
+    curate_model: str
 
     # Async batching configuration
     llm_batch_size: int = Field(default=10, ge=1)  # Questions/answers batch size
@@ -147,7 +149,7 @@ class DatasetConfig(BaseModel):
     val_split: float = Field(default=0.1, ge=0.0, le=1.0)
     test_split: float = Field(default=0.1, ge=0.0, le=1.0)
 
-    images_dir: Path = Field(default=Path("outputs/images")) 
+    images_dir: Path = Field(default=Path("outputs/images"))
 
     hub_id: str | None = None
     license: str = "apache-2.0"

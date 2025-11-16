@@ -1,0 +1,321 @@
+# Main configuration for quantum assistant dataset generation
+
+sources:
+  - path: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/data
+    type: directory
+    include_patterns:
+      - "*.ipynb"
+      - "*.mdx"
+      - "*.pdf"
+      - "*.txt"
+      - "*.json"
+    exclude_patterns:
+      - "**/node_modules/**"
+      - "**/.git/**"
+    max_files: 20
+
+categories:
+  - name: quantum_fundamentals
+    description: Superposition, measurement, Born's rule, uncertainty, wave-particle duality, Bloch sphere, quantum postulates, Dirac notation
+    weight: 3200
+
+  - name: quantum_states_entanglement
+    description: Bell states, EPR, entanglement measures, cluster states, teleportation, nonlocality, quantum correlations
+    weight: 2800
+
+  - name: quantum_gates_circuits
+    description: Pauli gates, Hadamard, CNOT, controlled gates, rotations, multi-control, QASM, circuit depth, transpilation
+    weight: 3300
+
+  - name: quantum_algorithms
+    description: QFT, Grover, Shor, phase estimation, Simon, amplitude estimation, VQE, QAOA, algorithm complexity
+    weight: 3400
+
+  - name: quantum_ml_optimization
+    description: Quantum kernels, QNNs, quantum classifiers, GAN, hybrid pipelines, parameterized circuits, data encoding
+    weight: 2300
+
+  - name: quantum_simulation_hamiltonians
+    description: Trotter-Suzuki, qDRIFT, Hamiltonian simulation, Heisenberg Ising models, Jordan-Wigner, time evolution
+    weight: 2500
+
+  - name: quantum_error_correction_noise
+    description: Error correction codes, stabilizers, surface codes, Lindblad, decoherence, noise mitigation, benchmarking
+    weight: 2200
+
+  - name: quantum_information_communication
+    description: Quantum cryptography, BB84, E91, superdense coding, channel capacity, quantum networks, secret sharing
+    weight: 2000
+
+  - name: variational_hybrid_approaches
+    description: VQE, QAOA, SSVQE, VQSD, loss landscapes, optimizer choices, initialization strategies
+    weight: 2500
+
+  - name: quantum_thermodynamics
+    description: Gibbs states, entropy, thermalization, adiabatic theorem, work extraction, open quantum systems
+    weight: 1400
+
+  - name: advanced_topological
+    description: Topological qubits, anyons, Kitaev models, Yang-Baxter, topological states, braiding
+    weight: 1000
+
+  - name: frameworks_tooling
+    description: Qiskit, PennyLane, OpenQASM, QuTiP, SDK differences, backend selection, transpiler, QASM generation
+    weight: 3200
+
+  - name: hardware_backends
+    description: NISQ constraints, qubit connectivity, readout errors, calibration, noise models, simulators, resource estimation
+    weight: 2000
+
+  - name: education_meta
+    description: Benchmarks, tutorials, best practices, reproducibility, educational exercises, introductory content
+    weight: 1500
+
+models:
+  endpoints:
+    - name: vision-model
+      base_url: ${VISION_MODEL_BASE_URL}
+      api_key: ${VISION_MODEL_API_KEY}
+      model_name: ${VISION_MODEL_NAME}
+      max_tokens: 4096
+      temperature: 0.2
+
+    - name: question-model
+      base_url: ${QUESTION_MODEL_BASE_URL}
+      api_key: ${QUESTION_MODEL_API_KEY}
+      model_name: ${QUESTION_MODEL_NAME}
+      max_tokens: 4096
+      temperature: 0.1
+
+    - name: answer-model
+      base_url: ${ANSWER_MODEL_BASE_URL}
+      api_key: ${ANSWER_MODEL_API_KEY}
+      model_name: ${ANSWER_MODEL_NAME}
+      max_tokens: 4096
+      temperature: 0.1
+
+    - name: curate-model
+      base_url: ${CURATE_MODEL_BASE_URL}
+      api_key: ${CURATE_MODEL_API_KEY}
+      model_name: ${CURATE_MODEL_NAME}
+      max_tokens: 512
+      temperature: 0.1
+
+prompts:
+  question_generation: |
+    Reasoning: medium
+    Based on this content, generate a natural self-contained question that a user, student, or developer would ask about quantum computing or Qiskit in a objective and clear way.
+
+    Content:
+    {context}
+
+    Important:
+    - Write as if you are a real user asking for help
+    - Be natural; the user won't appreciate it. It's not friendly. Be objective and concise, but include the necessary details
+    - The question MUST be self-contained: if you reference any formula, circuit, code, image, or concept from the content, INCLUDE IT in the question
+    - If referencing formulas or circuits, write them out in the question
+    - DO NOT include difficulty level, hints, or task names in the question
+    - DO NOT use formatting like "**Task**" or "*Hint:*"
+    - DO NOT include phrases like "Any guidance", "Any concrete example", "Any help", "Any help with", "would be appreciated" ... just ask the question
+    - Be specific and include relevant details from the content, but don't be too verbose
+
+    Return ONLY the question text as a user would write it.
+
+  answer_generation: |
+    Question: {question}
+
+    Context:
+    {context}
+
+    Provide a clear, accurate answer focusing on Qiskit. 
+    Include code examples when relevant.
+
+    Important:
+    - Just give one response, without different options or methods
+    - For code responses: Put all code in just one code block, create objective clean code with typing and best patterns and minimal comments
+    - DO NOT add tips, hints, or extra messages  
+    - DO NOT include phrases like "Happy coding!", "Feel free to tweak...", or similar closings
+    - DO NOT use PennyLane or other frameworks unless specifically asked
+    - DO NOT include any links or URLs
+    - Focus on direct, helpful answers without extra commentary
+    - Be objective and concise
+
+  summary_generation: |
+    Reasoning: medium
+    Based on this content, generate a natural self-contained question where a user asks for a summary or explanation of a quantum computing concept or topic.
+
+    Content:
+    {context}
+
+    Important:
+    - Write as if you are a user requesting a summary or overview
+    - The question MUST be self-contained: include specific concepts, formulas, or topics you're asking about
+    - Examples: "Can you summarize the quantum Fourier transform and its applications in Shor's algorithm?", "What are the key differences between VQE and QAOA optimization approaches?"
+    - DO NOT use vague references like "this topic", "the above", "the document"
+    - DO NOT include difficulty level or task names in the question
+    - Be specific about what you want summarized
+    - Make it sound natural and conversational
+
+    Return ONLY the question text as a user would write it.
+
+  caption_generation: |
+    Context:
+    {context}
+
+    Image description: {image_description}
+
+    Generate a natural question about what is shown in this image related to quantum computing or Qiskit.
+
+    Important:
+    - The image provides the visual context, so DO NOT describe the image in the question
+    - Ask about the concept, circuit, or diagram shown
+    - Examples: "How do I implement this circuit in Qiskit?", "Can you explain what this quantum state represents?"
+    - Make it sound like a real user asking about the image
+    - DO NOT use phrases like "the image above" or "shown in the image"
+
+    Return ONLY the question text.
+
+  code_generation: |
+    Reasoning: medium
+    Based on this content, generate a natural self-contained coding question a developer would ask about implementing concepts in Qiskit.
+
+    Content:
+    {context}
+
+    Important:
+    - Write as a real developer seeking help
+    - The question MUST be self-contained: if you reference specific algorithms, circuits, or approaches, describe them briefly in the question
+    - Include relevant details like "I want to implement a VQE circuit for H2 molecule" instead of "implement this algorithm"
+    - DO NOT use phrases like "the code above", "this implementation", "the example shown" without including specifics
+    - DO NOT include task labels like "Coding Task - Easy" or difficulty indicators
+    - DO NOT add hints or tips in the question
+    - Make it specific and practical
+    - Be clear about what you want to implement
+
+    Return ONLY the question text as a developer would write it.
+
+  content_quality_check: |
+    Reasoning: low
+    This content can be used for educational purposes or to generate questions about topics such as quantum computing, physics, mathematics, or code. For example, someone reading or viewing this content could formulate a question, request code, a summary, or an explanation... (not bibliography, logos, or noise).
+
+    {content}
+
+    Answer ONLY 'yes' or 'no'.
+
+  image_quality_check: |
+    Reasoning: low
+    Based on the image transcription, is this image educationally relevant for quantum computing training data?
+    Consider if it shows quantum concepts, circuits, diagrams, or visualizations (not just decorative elements or logos).
+
+    Image transcription: {transcription}
+
+    {context}
+
+    Answer ONLY 'yes' or 'no'.
+
+  image_transcription: |
+    Provide a detailed, objective and technical description of this image related to quantum computing, mathematics, or physics.
+    If the image is not related to quantum computing, mathematics, or physics, describe in simple terms what it is.
+    Focus on:
+    - Key visual elements (circuits, gates, qubits, states, diagrams, formulas, graphs, etc.), how they interact
+    - Mathematical notation or formulas if present
+    - Any labels, legends, or annotations that help understand the image
+    - Charts or graphs description if present
+
+    The idea is that it should be possible to understand the image without looking at it.
+
+  category_classification: |
+    Reasoning: low
+    Classify into ONE category:
+
+    {categories}
+
+    Content: {content}
+
+    Return ONLY the category name.
+
+  qa_curation: |
+    Reasoning: low
+    You are a quality control filter. Evaluate if this Q&A pair passes quality standards.
+
+    Question: {question}
+
+    Answer: {answer}
+
+    Check for the following issues (respond "REJECT" if ANY are found):
+    1. Hallucinations: Answer invents information not supported by quantum computing facts
+    2. Word repetition: Answer has excessive word or phrase repetition
+    3. Off-topic: Answer doesn't address the question or discusses unrelated topics
+    4. Links/URLs: Answer contains any web links or URLs
+    5. Inappropriate content: Answer has unprofessional language or irrelevant commentary
+    6. Wrong framework: Answer uses PennyLane or non-Qiskit frameworks when Qiskit was requested
+    7. Incomplete: Answer is truncated or ends mid-sentence
+
+    If the answer passes ALL checks, respond "PASS".
+    If the answer fails ANY check, respond "REJECT".
+
+    Return ONLY one word: "PASS" or "REJECT".
+
+generation:
+  target_samples: 30 #30000
+
+  question_model: question-model
+  vision_model: vision-model
+  answer_model: answer-model
+  curate_model: curate-model
+
+  llm_batch_size: 32 # LLM batch size
+  llm_concurrency: 10 # LLM concurrent requests (from benchmark: 1.10 req/s)
+  vlm_batch_size: 16 # VLM batch size
+  vlm_concurrency: 16 # VLM concurrent requests (from benchmark: 0.478 req/s)
+
+  multimodal_ratio: 0.5
+
+  question_types:
+    - qa
+    - code
+    - caption
+    - summary
+
+  question_type_weights:
+    qa: 1.0
+    code: 1.0
+    caption: 1.0
+    summary: 1.0
+
+  difficulty_levels:
+    - easy
+    - medium
+    - hard
+
+  difficulty_weights:
+    easy: 1.0
+    medium: 1.0
+    hard: 1.0
+
+  max_context_length: 2048
+  chunk_overlap: 200
+
+  enable_image_transcription: true
+  enable_content_filtering: true
+  enable_deduplication: true
+  similarity_threshold: 0.85
+
+dataset:
+  name: quantum-assistant-30k
+  description: |
+    Synthetic multimodal dataset for quantum computing with Qiskit.
+    14 categories, balanced distribution, multiple difficulty levels.
+
+  parsed_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/parsed
+  generated_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/generated
+  final_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/final
+  images_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/images
+
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+
+  license: apache-2.0
+
+seed: 42

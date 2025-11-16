@@ -17,6 +17,7 @@ class PromptSet:
     content_quality_check: str
     image_quality_check: str
     category_classification: str
+    qa_curation: str = ""
 
     def get_question_prompt(self, question_type: QuestionType) -> str:
         """Get prompt template for a question type."""
