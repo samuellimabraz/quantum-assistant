@@ -220,22 +220,46 @@ class HuggingFaceExporter:
 
     def _load_and_convert_image(self, image_path: Path):
         """Load an image and convert it to a PIL Image in a standard format."""
+        import io
 
         try:
-            with PILImage.open(image_path) as img:
-                if img.mode not in ("RGB", "L"):
-                    if img.mode == "RGBA":
-                        rgb_img = PILImage.new("RGB", img.size, (255, 255, 255))
-                        rgb_img.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                        img = rgb_img
-                    else:
-                        img = img.convert("RGB")
+            if image_path.suffix.lower() == ".svg":
+                try:
+                    from wand.image import Image as WandImage
+                    from wand.color import Color
 
-                max_size = 1024
-                if img.width > max_size or img.height > max_size:
-                    img.thumbnail((max_size, max_size), PILImage.Resampling.LANCZOS)
+                    with WandImage(filename=str(image_path), resolution=300) as wand_img:
+                        wand_img.background_color = Color("white")
+                        wand_img.alpha_channel = "remove"
+                        wand_img.format = "png"
+                        png_blob = wand_img.make_blob("png")
+                        img = PILImage.open(io.BytesIO(png_blob))
+                except ImportError:
+                    print(f"Warning: Wand not available for SVG {image_path}, skipping")
+                    return None
+            else:
 
-                return img.copy()
+                if str(image_path).lower().endswith(".avif"):
+                    try:
+                        import pillow_avif
+                    except ImportError:
+                        print(f"Warning: pillow-avif not available for {image_path}, skipping")
+                        return None
+                img = PILImage.open(image_path)
+
+            if img.mode not in ("RGB", "L"):
+                if img.mode == "RGBA":
+                    rgb_img = PILImage.new("RGB", img.size, (255, 255, 255))
+                    rgb_img.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
+                    img = rgb_img
+                else:
+                    img = img.convert("RGB")
+
+            max_size = 1024
+            if img.width > max_size or img.height > max_size:
+                img.thumbnail((max_size, max_size), PILImage.Resampling.LANCZOS)
+
+            return img.copy()
 
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
