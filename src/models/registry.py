@@ -15,6 +15,7 @@ class ModelEndpoint:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         timeout: float = 300.0,
+        service_tier: str | None = None,
     ):
         self.name = name
         self.base_url = base_url
@@ -23,6 +24,7 @@ class ModelEndpoint:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self.service_tier = service_tier
 
 
 class ModelRegistry:
@@ -52,6 +54,7 @@ class ModelRegistry:
             max_tokens=endpoint.max_tokens,
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
+            service_tier=endpoint.service_tier,
         )
         self._clients[model_name] = client
         return client
@@ -74,6 +77,7 @@ class ModelRegistry:
             max_tokens=endpoint.max_tokens,
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
+            service_tier=endpoint.service_tier,
         )
         self._clients[model_name] = client
         return client

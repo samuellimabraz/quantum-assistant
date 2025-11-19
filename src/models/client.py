@@ -13,8 +13,13 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-# macOS: Automatically configure cairo library path if using Homebrew
+# macOS: Automatically configure library paths if using Homebrew
 if sys.platform == "darwin":
+    # Configure ImageMagick for Wand
+    if "MAGICK_HOME" not in os.environ:
+        os.environ["MAGICK_HOME"] = "/opt/homebrew"
+
+    # Configure cairo library path
     try:
         cairo_path = (
             subprocess.check_output(["brew", "--prefix", "cairo"], stderr=subprocess.DEVNULL)
@@ -49,8 +54,9 @@ class LLMClient:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         timeout: float = 300.0,
-        max_retries: int = 3,
+        max_retries: int = 5,
         retry_delay: float = 1.0,
+        service_tier: str | None = None,
     ):
         """Initialize LLM client."""
         self.base_url = base_url.rstrip("/")
@@ -61,6 +67,7 @@ class LLMClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.service_tier = service_tier
 
         self.client = httpx.Client(timeout=timeout)
         self.async_client = httpx.AsyncClient(timeout=timeout)
@@ -84,6 +91,9 @@ class LLMClient:
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature or self.temperature,
         }
+
+        if self.service_tier:
+            payload["service_tier"] = self.service_tier
 
         response = self.client.post(url, json=payload, headers=headers)
         response.raise_for_status()
@@ -116,6 +126,9 @@ class LLMClient:
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature or self.temperature,
         }
+
+        if self.service_tier:
+            payload["service_tier"] = self.service_tier
 
         last_error = None
         for attempt in range(self.max_retries):
@@ -203,22 +216,42 @@ class LLMClient:
 class VLMClient(LLMClient):
     """Client for vision-language models with async batch support."""
 
-    def _process_image(self, image_path: Path | str) -> str:
-        """Process image to base64 JPEG."""
+    def _process_image(self, image_path: Path | str, save_debug: bool = False) -> str:
+        """
+        Process image to base64 JPEG.
+
+        Args:
+            image_path: Path to image file
+            save_debug: If True, save converted image for debugging
+
+        Returns:
+            Base64 encoded JPEG image
+        """
         image_path = Path(image_path)
 
         if image_path.suffix.lower() == ".svg":
             try:
-                import cairosvg
+                from wand.image import Image as WandImage
+                from wand.color import Color
 
-                png_data = cairosvg.svg2png(url=str(image_path))
-                img = Image.open(io.BytesIO(png_data))
+                with WandImage(filename=str(image_path), resolution=300) as wand_img:
+                    wand_img.background_color = Color("white")
+                    wand_img.alpha_channel = "remove"
+
+                    wand_img.format = "png"
+                    png_blob = wand_img.make_blob("png")
+
+                    img = Image.open(io.BytesIO(png_blob))
+
             except ImportError:
-                raise ImportError("cairosvg required for SVG. Install with: pip install cairosvg")
+                raise ImportError(
+                    "Wand required for SVG. Install with: pip install Wand\n"
+                    "Also requires ImageMagick: brew install imagemagick (Mac) or apt-get install libmagickwand-dev (Linux)"
+                )
         else:
             if str(image_path).lower().endswith(".avif"):
                 try:
-                    import pillow_avif  # noqa: F401
+                    import pillow_avif 
                 except ImportError:
                     raise ImportError(
                         "pillow-avif required for AVIF. Install with: pip install pillow-avif"
@@ -240,6 +273,13 @@ class VLMClient(LLMClient):
             background.paste(img, mask=img.split()[3])
             img = background
 
+        if save_debug:
+            debug_dir = Path("outputs/vlm_debug")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / f"{image_path.stem}_processed.jpg"
+            img.save(debug_path, format="JPEG", quality=95)
+            print(f"  [Debug] Saved processed image: {debug_path}")
+
         # Encode to base64
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=95, optimize=True)
@@ -254,9 +294,10 @@ class VLMClient(LLMClient):
         image_path: Path | str,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        save_debug: bool = False,
     ) -> str:
         """Generate text completion with image input."""
-        image_data = self._process_image(image_path)
+        image_data = self._process_image(image_path, save_debug=save_debug)
 
         message = Message(
             role="user",
@@ -277,9 +318,10 @@ class VLMClient(LLMClient):
         image_path: Path | str,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        save_debug: bool = False,
     ) -> str:
         """Generate text completion with image input asynchronously."""
-        image_data = self._process_image(image_path)
+        image_data = self._process_image(image_path, save_debug=save_debug)
 
         message = Message(
             role="user",
