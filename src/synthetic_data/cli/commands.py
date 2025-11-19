@@ -491,8 +491,9 @@ def filter_quality(
             progress.update(task, completed=completed)
 
         with ModelRegistry(config.models) as model_registry:
-            question_client = model_registry.get_llm_client(config.generation.question_model)
-            quality_filter = QualityFilter(question_client)
+            filter_model_name = config.generation.filter_model or config.generation.curate_model
+            filter_client = model_registry.get_llm_client(filter_model_name)
+            quality_filter = QualityFilter(filter_client)
 
             total_images_before = sum(len(chunk.images) for chunk in all_chunks)
 
@@ -501,28 +502,43 @@ def filter_quality(
                 f"concurrency={config.generation.llm_concurrency}[/cyan]"
             )
 
-            # Use async batch filtering
-            filter_results = asyncio.run(
+            filter_results, debug_info = asyncio.run(
                 quality_filter.filter_chunks_batch_async(
                     all_chunks,
                     config.prompts.content_quality_check,
                     config.prompts.image_quality_check,
+                    config.prompts.content_filter_system,
+                    config.prompts.image_filter_system,
                     batch_size=config.generation.llm_batch_size,
                     max_concurrent=config.generation.llm_concurrency,
                     progress_callback=update_filter_progress,
+                    save_debug=True,
                 )
             )
 
-            # Extract filtered chunks
             filtered_chunks = [chunk for chunk, passed in filter_results if passed]
+
+            # Save debug information
+            if debug_info:
+                debug_file = output_dir / "filter_debug.jsonl"
+                with open(debug_file, "w") as f:
+                    for entry in debug_info:
+                        json.dump(entry, f, ensure_ascii=False)
+                        f.write("\n")
+
+                # Count rejections
+                rejected_count = sum(1 for entry in debug_info if entry["decision"] == "REJECT")
+                console.print(f"\n[cyan]ℹ Filter debug info saved: {debug_file}[/cyan]")
+                console.print(
+                    f"[cyan]  Total filtered: {len(debug_info)} items, "
+                    f"{rejected_count} rejected[/cyan]"
+                )
 
     total_images_after = sum(len(chunk.images) for chunk in filtered_chunks)
 
-    # Save filtered chunks
     with open(output_file, "wb") as f:
         pickle.dump(filtered_chunks, f)
 
-    # Save summary
     summary = {
         "chunks_before": len(all_chunks),
         "chunks_after": len(filtered_chunks),
@@ -611,8 +627,10 @@ def classify(
             progress.update(task, completed=completed)
 
         with ModelRegistry(config.models) as model_registry:
-            question_client = model_registry.get_llm_client(config.generation.question_model)
-            category_manager = CategoryManager(config.categories, question_client)
+            # Use dedicated classify model if specified, otherwise fall back to curate model
+            classify_model_name = config.generation.classify_model or config.generation.curate_model
+            classify_client = model_registry.get_llm_client(classify_model_name)
+            category_manager = CategoryManager(config.categories, classify_client)
 
             console.print(
                 f"[cyan]Batch size={config.generation.llm_batch_size}, "
@@ -623,6 +641,7 @@ def classify(
             chunks_by_category = category_manager.organize_by_category(
                 all_chunks,
                 config.prompts.category_classification,
+                config.prompts.category_classification_system,
                 batch_size=config.generation.llm_batch_size,
                 max_concurrent=config.generation.llm_concurrency,
                 progress_callback=update_classify_progress,
@@ -711,7 +730,14 @@ def generate(
         f"[cyan]Using batch_size={config.generation.llm_batch_size}, "
         f"concurrency={config.generation.llm_concurrency}[/cyan]"
     )
-    console.print("[cyan]Generation pipeline: Question → Answer → Quality Filter[/cyan]\n")
+
+    pipeline_steps = "Question → Answer"
+    if config.generation.enable_curate_filtering:
+        pipeline_steps += " → Quality Filter"
+    console.print(f"[cyan]Generation pipeline: {pipeline_steps}[/cyan]\n")
+
+    # Storage for rejected samples
+    rejected_samples_list = []
 
     with Progress(
         SpinnerColumn(),
@@ -745,6 +771,9 @@ def generate(
         def update_curation_progress(completed):
             progress.update(curation_task, completed=completed)
 
+        def save_rejected(rejected):
+            rejected_samples_list.extend(rejected)
+
         progress_callbacks = {
             "set_questions_total": set_questions_total,
             "questions": update_question_progress,
@@ -752,11 +781,13 @@ def generate(
             "answers": update_answer_progress,
             "set_curation_total": set_curation_total,
             "curation": update_curation_progress,
+            "save_rejected": save_rejected,
         }
 
         with ModelRegistry(config.models) as model_registry:
+            classify_model_name = config.generation.classify_model or config.generation.curate_model
             category_manager = CategoryManager(
-                config.categories, model_registry.get_llm_client(config.generation.question_model)
+                config.categories, model_registry.get_llm_client(classify_model_name)
             )
 
             pipeline = GenerationPipeline(config, model_registry, category_manager)
@@ -784,13 +815,27 @@ def generate(
             )
             f.write("\n")
 
+    # Save rejected samples for inspection
+    if rejected_samples_list:
+        with open(output_dir / "rejected_samples.jsonl", "w") as f:
+            for rejected in rejected_samples_list:
+                json.dump(rejected, f, ensure_ascii=False, indent=None)
+                f.write("\n")
+
+        console.print(
+            f"\n[yellow]ℹ {len(rejected_samples_list)} rejected samples saved to: "
+            f"{output_dir / 'rejected_samples.jsonl'}[/yellow]"
+        )
+
     # Save summary
     summary = {
         "total_samples": len(samples),
+        "rejected_samples": len(rejected_samples_list),
         "multimodal_samples": sum(1 for s in samples if s.image_path),
         "text_only_samples": sum(1 for s in samples if not s.image_path),
         "by_type": {},
         "by_category": {},
+        "curation_enabled": config.generation.enable_curate_filtering,
     }
 
     for sample in samples:
@@ -807,6 +852,8 @@ def generate(
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green", justify="right")
     table.add_row("Total Samples", str(len(samples)))
+    if config.generation.enable_curate_filtering:
+        table.add_row("Rejected Samples", str(summary["rejected_samples"]))
     table.add_row("Multimodal", str(summary["multimodal_samples"]))
     table.add_row("Text-only", str(summary["text_only_samples"]))
 
@@ -823,6 +870,11 @@ def generate(
     console.print("\n")
     console.print(type_table)
     console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
+
+    if rejected_samples_list:
+        console.print(
+            f"[yellow]ℹ Review rejected samples at: {output_dir / 'rejected_samples.jsonl'}[/yellow]"
+        )
 
 
 def build(
