@@ -53,6 +53,7 @@ class ModelEndpoint(BaseModel):
     model_name: str | None = None
     max_tokens: int = Field(default=4096, ge=1)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    service_tier: str | None = Field(default=None) 
 
     @field_validator("base_url", "api_key", "model_name", mode="before")
     @classmethod
@@ -80,16 +81,35 @@ class ModelConfig(BaseModel):
 class PromptsConfig(BaseModel):
     """Prompts for different generation tasks."""
 
+    # Question generation prompts
     question_generation: str
+    question_generation_system: str = ""
+
+    # Answer generation prompts
     answer_generation: str
+    answer_generation_system: str = ""
+
+    # Other question types
     summary_generation: str
     caption_generation: str
     code_generation: str
+
+    # Quality checking prompts
     content_quality_check: str
+    content_filter_system: str = ""
     image_quality_check: str
-    image_transcription: str
+    image_filter_system: str = ""
+
+    # Classification prompts
     category_classification: str
+    category_classification_system: str = ""
+
+    # Curation prompts
     qa_curation: str
+    qa_curation_system: str = ""
+
+    # VLM prompts
+    image_transcription: str
 
 
 class GenerationConfig(BaseModel):
@@ -100,6 +120,8 @@ class GenerationConfig(BaseModel):
     vision_model: str | None = None
     answer_model: str
     curate_model: str
+    filter_model: str | None = None
+    classify_model: str | None = None
 
     # Async batching configuration
     llm_batch_size: int = Field(default=10, ge=1)  # Questions/answers batch size
@@ -118,6 +140,7 @@ class GenerationConfig(BaseModel):
 
     enable_image_transcription: bool = Field(default=True)
     enable_content_filtering: bool = Field(default=False)
+    enable_curate_filtering: bool = Field(default=True)
     enable_deduplication: bool = Field(default=True)
     similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
 
