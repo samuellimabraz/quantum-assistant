@@ -18,6 +18,10 @@ class Chunk:
     images: list[ImageReference] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
+    previous_chunk_text: str = ""
+    next_chunk_text: str = ""
+    all_document_code: list[str] = field(default_factory=list)
+
     @property
     def is_multimodal(self) -> bool:
         """Check if chunk contains images."""
@@ -27,6 +31,13 @@ class Chunk:
     def token_estimate(self) -> int:
         """Rough estimate of token count (chars / 4)."""
         return len(self.text) // 4
+
+    @property
+    def extended_code_context(self) -> str:
+        """Get all available code from document."""
+        if self.all_document_code:
+            return "\n\n".join(self.all_document_code)
+        return "\n\n".join(self.code_blocks) if self.code_blocks else ""
 
 
 class ContentChunker:
@@ -44,7 +55,7 @@ class ContentChunker:
         self.overlap = overlap
 
     def chunk_document(self, document: Document) -> list[Chunk]:
-        """Split document into chunks."""
+        """Split document into chunks with extended context."""
         chunks = []
 
         # Split content into paragraphs
@@ -74,6 +85,9 @@ class ContentChunker:
         if current_text:
             chunk = self._create_chunk(current_text, document, chunk_id)
             chunks.append(chunk)
+
+        # Add neighbor context and full document code to each chunk
+        self._add_extended_context(chunks, document)
 
         return chunks
 
@@ -131,3 +145,20 @@ class ContentChunker:
             overlap_length += len(part)
 
         return overlap_text
+
+    def _add_extended_context(self, chunks: list[Chunk], document: Document) -> None:
+        """Add neighbor context and full document code to chunks."""
+        all_code = document.code_blocks.copy()
+
+        for i, chunk in enumerate(chunks):
+            # Add full document code
+            chunk.all_document_code = all_code
+
+            # Add previous chunk text truncated
+            if i > 0:
+                prev_text = chunks[i - 1].text
+                chunk.previous_chunk_text = prev_text[-500:] if len(prev_text) > 500 else prev_text
+
+            if i < len(chunks) - 1:
+                next_text = chunks[i + 1].text
+                chunk.next_chunk_text = next_text[:500] if len(next_text) > 500 else next_text
