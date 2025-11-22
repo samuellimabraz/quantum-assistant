@@ -103,9 +103,17 @@ class MDXParser(DocumentParser):
         # Markdown images
         md_pattern = r"!\[(.*?)\]\((.*?)\)"
         for match in re.finditer(md_pattern, content):
+            img_path = match.group(2).strip()
+            
+            # Handle optional title
+            if ' "' in img_path:
+                img_path = img_path.split(' "')[0]
+            elif " '" in img_path:
+                img_path = img_path.split(" '")[0]
+
             images.append(
                 ImageReference(
-                    path=match.group(2),
+                    path=img_path,
                     alt_text=match.group(1),
                 )
             )
