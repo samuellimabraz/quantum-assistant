@@ -6,14 +6,13 @@ from pathlib import Path
 
 import fitz
 import nbformat
-from PIL import Image
 
 
 class ImageResolver:
     """Resolve and extract images from various sources."""
 
-    MIN_IMAGE_SIZE = 250
-    MIN_IMAGE_AREA = 20000
+    MIN_IMAGE_SIZE = 160
+    MIN_IMAGE_AREA = 17000
 
     def __init__(self, images_output_dir: Path):
         """
@@ -31,19 +30,18 @@ class ImageResolver:
         Works for both MDX and Jupyter notebooks.
 
         Args:
-            image_path: Image path (e.g., /learning/images/...)
+            image_path: Image path (e.g., /learning/images/... or /docs/images/...)
             source_path: Path to source file
 
         Returns:
             Absolute path to image file, or None if not found
         """
-        # Handle URLs - skip for now
+        # Handle URLs
         if image_path.startswith(("http://", "https://")):
             return None
 
         # Handle absolute paths starting with /
         if image_path.startswith("/"):
-            # Try to find in public directory
             doc_root = self._find_doc_root(source_path)
             if doc_root:
                 public_dir = doc_root / "public"
@@ -52,16 +50,32 @@ class ImageResolver:
                     if candidate.exists():
                         return candidate
 
+                    # Check for common image extensions if not found
+                    for ext in [".avif", ".svg", ".png", ".jpg", ".jpeg", ".gif"]:
+                        candidate_with_ext = public_dir / (image_path.lstrip("/") + ext)
+                        if candidate_with_ext.exists():
+                            return candidate_with_ext
+
         # Handle relative paths
-        candidate = source_path.parent / image_path
-        if candidate.exists():
-            return candidate
+        if not image_path.startswith("/"):
+            # Try relative to source file's directory
+            candidate = source_path.parent / image_path
+            if candidate.exists():
+                return candidate
+
+            # Try relative to source file's parent directories (up to 3 levels)
+            current = source_path.parent
+            for _ in range(3):
+                current = current.parent
+                candidate = current / image_path
+                if candidate.exists():
+                    return candidate
 
         return None
 
     def extract_notebook_image(self, attachment_name: str, notebook_path: Path) -> Path | None:
         """
-        Extract embedded image from notebook and save to disk.
+        Extract embedded image from notebook attachments and save to disk.
 
         Args:
             attachment_name: Name of attachment (e.g., "Screenshot.png")
@@ -109,6 +123,111 @@ class ImageResolver:
             print(f"Warning: Failed to extract image {attachment_name} from {notebook_path}: {e}")
 
         return None
+
+    def extract_data_uri_image(self, data_uri: str, source_path: Path) -> Path | None:
+        """
+        Extract image from data URI (base64 encoded inline image).
+
+        Args:
+            data_uri: Data URI string (data:image/png;base64,...)
+            source_path: Path to source document
+
+        Returns:
+            Path to extracted image file, or None if extraction failed
+        """
+        try:
+            if not data_uri.startswith("data:image/"):
+                return None
+
+            # Parse: data:image/png;base64,<base64_data>
+            header, data = data_uri.split(",", 1)
+            mime_type = header.split(";")[0].replace("data:", "")
+
+            # Get extension
+            ext = mime_type.split("/")[-1]
+            if ext == "jpeg":
+                ext = "jpg"
+
+            # Decode base64
+            image_bytes = base64.b64decode(data)
+
+            # Generate unique filename using hash
+            file_hash = hashlib.md5(image_bytes).hexdigest()[:8]
+            output_filename = f"{source_path.stem}_inline_{file_hash}.{ext}"
+            output_path = self.images_output_dir / output_filename
+
+            # Save if doesn't exist (deduplication)
+            if not output_path.exists():
+                with open(output_path, "wb") as f:
+                    f.write(image_bytes)
+
+            return output_path
+
+        except Exception as e:
+            print(f"Warning: Failed to extract data URI image: {e}")
+            return None
+
+    def extract_notebook_output_image(
+        self,
+        image_data: str,
+        image_format: str,
+        notebook_path: Path,
+        cell_idx: int,
+        output_idx: int,
+    ) -> Path | None:
+        """
+        Extract image from notebook cell output and save to disk.
+
+        Args:
+            image_data: Base64-encoded image data (or raw SVG string)
+            image_format: Image format (png, jpeg, svg+xml)
+            notebook_path: Path to notebook file
+            cell_idx: Index of the cell
+            output_idx: Index of the output
+
+        Returns:
+            Path to extracted image file, or None if extraction failed
+        """
+        try:
+            # Normalize format
+            ext = image_format.replace("+xml", "")
+            if ext == "jpeg":
+                ext = "jpg"
+
+            # Generate unique filename
+            output_filename = (
+                f"{notebook_path.stem}_cell{cell_idx}_output{output_idx}.{ext}"
+            )
+            output_path = self.images_output_dir / output_filename
+
+            # Handle SVG (not base64 encoded)
+            if image_format == "svg+xml":
+                # SVG is stored as plain text/list
+                svg_content = image_data
+                if isinstance(svg_content, list):
+                    svg_content = "".join(svg_content)
+
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(svg_content)
+            else:
+                # PNG/JPEG are base64 encoded
+                # Handle both string and list of strings
+                if isinstance(image_data, list):
+                    image_data = "".join(image_data)
+
+                image_bytes = base64.b64decode(image_data)
+
+                with open(output_path, "wb") as img_file:
+                    img_file.write(image_bytes)
+
+            return output_path
+
+        except Exception as e:
+            print(
+                f"Warning: Failed to extract output image from {notebook_path} "
+                f"(cell {cell_idx}, output {output_idx}): {e}"
+            )
+            return None
 
     def extract_pdf_images(self, pdf_path: Path) -> list[Path]:
         """
@@ -235,6 +354,13 @@ class ImageResolver:
         Returns:
             Absolute path to image, or None if not found
         """
+        # Handle notebook output images (already extracted)
+        if image_path.startswith("notebook_output:"):
+            # Format: notebook_output:filename.ipynb:cellN:outputN
+            # These are already extracted during parsing, path is in resolved_path
+            # This shouldn't normally be called since resolved_path is set during extraction
+            return None
+
         # Handle PDF image references
         if image_path.startswith("pdf:"):
             return self.extract_pdf_image_by_reference(image_path, source_path)
@@ -270,7 +396,7 @@ class ImageResolver:
         Returns:
             True if image is large enough
         """
-        if width < self.MIN_IMAGE_SIZE or height < self.MIN_IMAGE_SIZE:
+        if width < self.MIN_IMAGE_SIZE and height < self.MIN_IMAGE_SIZE:
             return False
 
         area = width * height
@@ -289,10 +415,24 @@ class ImageResolver:
         Returns:
             Path to doc root, or None if not found
         """
-        current = path.parent
+        current = path if path.is_dir() else path.parent
+
+        # Look for common documentation root patterns
         while current != current.parent:
             public_dir = current / "public"
             if public_dir.exists() and public_dir.is_dir():
-                return current
+                # Verify it's a documentation root by checking for expected subdirs
+                has_docs = (public_dir / "docs").exists()
+                has_learning = (public_dir / "learning").exists()
+                if has_docs or has_learning:
+                    return current
+
+            # Also check if we're inside a known documentation structure
+            if current.name in ["qiskit-documentation", "documentation", "docs"]:
+                public_dir = current / "public"
+                if public_dir.exists():
+                    return current
+
             current = current.parent
+
         return None
