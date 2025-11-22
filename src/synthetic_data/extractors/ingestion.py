@@ -33,13 +33,14 @@ class DocumentIngestion:
             images_output_dir: Directory to save extracted/resolved images
             image_transcriber: Optional image transcriber for VLM-based descriptions
         """
+        self.image_resolver = ImageResolver(images_output_dir) if images_output_dir else None
+
         self.parsers: list[DocumentParser] = [
-            JupyterParser(),
+            JupyterParser(image_resolver=self.image_resolver),
             MDXParser(),
             PDFParser(),
         ]
         self.toc_parser = TOCParser()
-        self.image_resolver = ImageResolver(images_output_dir) if images_output_dir else None
         self.image_transcriber = image_transcriber
 
     def ingest_source(self, source: SourceConfig) -> list[Document]:

@@ -21,40 +21,47 @@ class CategoryManager:
         self.categories = {cat.name: cat for cat in categories}
         self.llm_client = llm_client
 
-    def classify_chunk(self, chunk: Chunk, prompt_template: str | None = None) -> str:
+    def classify_chunk(
+        self,
+        chunk: Chunk,
+        prompt_template: str | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
         """
         Classify a chunk into a category.
 
         Args:
             chunk: Content chunk to classify
             prompt_template: Optional prompt template for LLM classification
+            system_prompt: Optional system prompt template
 
         Returns:
             Category name
         """
         # Use LLM classification if available
         if self.llm_client and prompt_template:
-            return self._llm_classify(chunk, prompt_template)
+            return self._llm_classify(chunk, prompt_template, system_prompt)
 
         # Fallback to keyword-based classification
         return self._keyword_classify(chunk)
 
-    def _llm_classify(self, chunk: Chunk, prompt_template: str) -> str:
+    def _llm_classify(
+        self, chunk: Chunk, prompt_template: str, system_prompt: str | None = None
+    ) -> str:
         """Classify using LLM."""
         categories_desc = "\n".join(
             [f"- {name}: {cat.description}" for name, cat in self.categories.items()]
         )
 
-        user_prompt = prompt_template.format(
-            categories=categories_desc,
-            content=chunk.text[:1500],
-        )
+        if system_prompt:
+            system_content = system_prompt.format(categories=categories_desc)
+        else:
+            system_content = "You are a content classifier. Return only the category name."
+
+        user_prompt = prompt_template.format(content=chunk.text[:1500])
 
         messages = [
-            Message(
-                role="system",
-                content="Reasoning: low. You are a content classifier. Return only the category name.",
-            ),
+            Message(role="system", content=system_content),
             Message(role="user", content=user_prompt),
         ]
 
@@ -96,7 +103,8 @@ class CategoryManager:
         self, total_samples: int, chunks_by_category: dict[str, list[Chunk]]
     ) -> dict[str, int]:
         """
-        Calculate target sample distribution across categories based on available chunks.
+        Calculate target sample distribution across categories.
+        Aims for equal distribution among categories that have chunks.
 
         Args:
             total_samples: Total number of samples to generate
@@ -105,26 +113,28 @@ class CategoryManager:
         Returns:
             Dict mapping category names to target sample counts
         """
-        # Calculate distribution proportional to number of chunks in each category
-        total_chunks = sum(len(chunks) for chunks in chunks_by_category.values())
-        
-        if total_chunks == 0:
-            return {name: 0 for name in self.categories}
-        
-        distribution = {}
-        for name in self.categories:
-            num_chunks = len(chunks_by_category.get(name, []))
-            proportion = num_chunks / total_chunks
-            distribution[name] = int(total_samples * proportion)
+        # Identify categories that have at least one chunk
+        active_categories = [
+            name
+            for name in self.categories
+            if chunks_by_category.get(name) and len(chunks_by_category[name]) > 0
+        ]
 
-        # Adjust for rounding errors - give remaining samples to category with most chunks
-        total_allocated = sum(distribution.values())
-        if total_allocated < total_samples:
-            max_chunks_cat = max(
-                self.categories.keys(),
-                key=lambda k: len(chunks_by_category.get(k, [])),
-            )
-            distribution[max_chunks_cat] += total_samples - total_allocated
+        if not active_categories:
+            return {name: 0 for name in self.categories}
+
+        # Equal distribution across active categories
+        num_active = len(active_categories)
+        base_count = total_samples // num_active
+        remainder = total_samples % num_active
+
+        distribution = {name: 0 for name in self.categories}
+
+        for i, name in enumerate(active_categories):
+            count = base_count
+            if i < remainder:
+                count += 1
+            distribution[name] = count
 
         return distribution
 
@@ -132,6 +142,7 @@ class CategoryManager:
         self,
         chunks: list[Chunk],
         prompt_template: str,
+        system_prompt: str | None = None,
         batch_size: int = 32,
         max_concurrent: int = 10,
         progress_callback=None,
@@ -142,6 +153,7 @@ class CategoryManager:
         Args:
             chunks: List of content chunks to classify
             prompt_template: Prompt template for LLM classification
+            system_prompt: Optional system prompt template
             batch_size: Size of batches for processing
             max_concurrent: Maximum concurrent LLM requests
             progress_callback: Optional callback function(completed_count) for progress tracking
@@ -156,18 +168,18 @@ class CategoryManager:
             [f"- {name}: {cat.description}" for name, cat in self.categories.items()]
         )
 
+        if system_prompt:
+            system_content = system_prompt.format(categories=categories_desc)
+        else:
+            system_content = "You are a content classifier. Return only the category name."
+
         # Prepare all classification prompts
         all_messages = []
         for chunk in chunks:
-            user_prompt = prompt_template.format(
-                categories=categories_desc,
-                content=chunk.text[:1500],
-            )
+            user_prompt = prompt_template.format(content=chunk.text[:1500])
+
             messages = [
-                Message(
-                    role="system",
-                    content="Reasoning: low. You are a content classifier. Return only the category name.",
-                ),
+                Message(role="system", content=system_content),
                 Message(role="user", content=user_prompt),
             ]
             all_messages.append(messages)
@@ -196,6 +208,7 @@ class CategoryManager:
         self,
         chunks: list[Chunk],
         prompt_template: str | None = None,
+        system_prompt: str | None = None,
         batch_size: int = 32,
         max_concurrent: int = 10,
         progress_callback=None,
@@ -206,6 +219,7 @@ class CategoryManager:
         Args:
             chunks: List of content chunks
             prompt_template: Optional prompt template for classification
+            system_prompt: Optional system prompt template
             batch_size: Size of batches for processing
             max_concurrent: Maximum concurrent LLM requests
             progress_callback: Optional callback function(completed_count) for progress tracking
@@ -218,7 +232,12 @@ class CategoryManager:
         if self.llm_client and prompt_template:
             categories = asyncio.run(
                 self._classify_and_cleanup_async(
-                    chunks, prompt_template, batch_size, max_concurrent, progress_callback
+                    chunks,
+                    prompt_template,
+                    system_prompt,
+                    batch_size,
+                    max_concurrent,
+                    progress_callback,
                 )
             )
             for chunk, category in zip(chunks, categories):
@@ -234,13 +253,14 @@ class CategoryManager:
         self,
         chunks: list[Chunk],
         prompt_template: str,
+        system_prompt: str | None,
         batch_size: int,
         max_concurrent: int,
         progress_callback=None,
     ) -> list[str]:
         """Classify chunks and cleanup async client."""
         categories = await self.classify_chunks_batch_async(
-            chunks, prompt_template, batch_size, max_concurrent, progress_callback
+            chunks, prompt_template, system_prompt, batch_size, max_concurrent, progress_callback
         )
         if self.llm_client:
             await self.llm_client.aclose()
