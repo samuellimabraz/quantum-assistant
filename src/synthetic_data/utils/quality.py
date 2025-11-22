@@ -21,33 +21,73 @@ class QualityFilter:
 
     def _parse_filter_response(self, response: str) -> Tuple[bool, str]:
         """
-        Parse structured filter response.
+        Parse filter response with robust handling of various formats.
 
         Args:
-            response: Model response with DECISION and REASON
+            response: Model response (may vary in format)
 
         Returns:
             Tuple of (passed, reason)
         """
         response = response.strip()
+        response_lower = response.lower()
 
-        decision = "no"
+        decision = None
         reason = "No reason provided"
 
-        for line in response.split("\n"):
-            line = line.strip()
-            if line.startswith("DECISION:"):
-                decision = line.split(":", 1)[1].strip().lower()
-            elif line.startswith("REASON:"):
-                reason = line.split(":", 1)[1].strip()
+        # Try structured format: "DECISION: yes/no\nREASON: ..."
+        lines = response.split("\n")
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            line_lower = line_stripped.lower()
 
-        if not decision or decision not in ["yes", "no"]:
-            if response.lower().startswith("yes"):
+            if "decision" in line_lower or "dec" in line_lower:
+                # Extract decision value after colon or space
+                if ":" in line_stripped:
+                    decision_text = line_stripped.split(":", 1)[1].strip().lower()
+                else:
+                    # No colon - try to extract yes/no from line
+                    decision_text = line_stripped.lower()
+
+                # Look for yes/no in the decision text
+                if "yes" in decision_text:
+                    decision = "yes"
+                elif "no" in decision_text:
+                    decision = "no"
+
+            # Look for reason
+            elif "reason" in line_lower:
+                if ":" in line_stripped:
+                    reason = line_stripped.split(":", 1)[1].strip()
+                else:
+                    # Reason might be on next line
+                    if i + 1 < len(lines):
+                        reason = lines[i + 1].strip()
+
+        # Fallback 1: Check if entire response starts with yes/no
+        if decision is None:
+            if response_lower.startswith("yes"):
                 decision = "yes"
-            elif response.lower().startswith("no"):
+            elif response_lower.startswith("no"):
                 decision = "no"
 
-        passed = decision.startswith("yes")
+        # Fallback 2: Search for yes/no anywhere in response
+        if decision is None:
+            # Count occurrences
+            yes_count = response_lower.count("yes")
+            no_count = response_lower.count("no")
+
+            if yes_count > no_count:
+                decision = "yes"
+            elif no_count > yes_count:
+                decision = "no"
+
+        # Default to "no" (reject) if still unclear
+        if decision is None:
+            decision = "no"
+            reason = "Unclear response format"
+
+        passed = decision == "yes"
         return passed, reason
 
     def is_quality_content(
@@ -210,7 +250,7 @@ class QualityFilter:
 
                     responses = await self.llm_client.generate_batch_async(
                         batch_to_process,
-                        max_tokens=500,
+                        max_tokens=1024,
                         temperature=0.1,
                         max_concurrent=max_concurrent,
                         progress_callback=batch_progress,
@@ -293,7 +333,7 @@ class QualityFilter:
 
                         try:
                             response = self.llm_client.generate(
-                                messages, max_tokens=500, temperature=0.1
+                                messages, max_tokens=1024, temperature=0.1
                             )
                             passed, reason = self._parse_filter_response(response)
 
