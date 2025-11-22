@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+Image.MAX_IMAGE_PIXELS = None
+
 # macOS: Automatically configure library paths if using Homebrew
 if sys.platform == "darwin":
     # Configure ImageMagick for Wand
@@ -174,7 +176,12 @@ class LLMClient:
         async def generate_with_limit(idx, messages):
             nonlocal completed_count
             async with semaphore:
-                result = await self.generate_async(messages, max_tokens, temperature)
+                try:
+                    result = await self.generate_async(messages, max_tokens, temperature)
+                except Exception as e:
+                    print(f"Error processing batch item {idx}: {e}")
+                    result = ""
+                
                 async with lock:
                     results[idx] = result
                     completed_count += 1
@@ -367,9 +374,14 @@ class VLMClient(LLMClient):
         async def generate_with_limit(idx, text, image_path):
             nonlocal completed_count
             async with semaphore:
-                result = await self.generate_with_image_async(
-                    text, image_path, max_tokens, temperature
-                )
+                try:
+                    result = await self.generate_with_image_async(
+                        text, image_path, max_tokens, temperature
+                    )
+                except Exception as e:
+                    print(f"Error processing image {image_path}: {e}")
+                    result = ""
+                
                 async with lock:
                     results[idx] = result
                     completed_count += 1
