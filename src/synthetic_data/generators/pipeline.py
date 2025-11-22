@@ -7,6 +7,7 @@ from synthetic_data.config import PipelineConfig, QuestionType
 from synthetic_data.extractors.chunker import Chunk
 from synthetic_data.models import Message, ModelRegistry, Sample
 from synthetic_data.utils import Deduplicator
+from synthetic_data.utils.code_verifier import CodeVerifier
 from synthetic_data.generators.category import CategoryManager
 from synthetic_data.generators.prompts import PromptSet
 
@@ -36,16 +37,22 @@ class GenerationPipeline:
         # Create prompt set from config
         self.prompts = PromptSet(
             question_generation=config.prompts.question_generation,
+            question_generation_system=getattr(config.prompts, "question_generation_system", ""),
             answer_generation=config.prompts.answer_generation,
+            answer_generation_system=getattr(config.prompts, "answer_generation_system", ""),
             summary_generation=config.prompts.summary_generation,
             caption_generation=config.prompts.caption_generation,
             code_generation=config.prompts.code_generation,
             content_quality_check=config.prompts.content_quality_check,
+            content_filter_system=getattr(config.prompts, "content_filter_system", ""),
             image_quality_check=config.prompts.image_quality_check,
+            image_filter_system=getattr(config.prompts, "image_filter_system", ""),
             category_classification=config.prompts.category_classification,
-            qa_curation=getattr(
-                config.prompts, "qa_curation", ""
-            ),  # Handle older configs without this field
+            category_classification_system=getattr(
+                config.prompts, "category_classification_system", ""
+            ),
+            sample_curation=getattr(config.prompts, "sample_curation", ""),
+            sample_curation_system=getattr(config.prompts, "sample_curation_system", ""),
         )
 
         random.seed(config.seed)
@@ -54,6 +61,16 @@ class GenerationPipeline:
         self.deduplicator = None
         if self.gen_config.enable_deduplication:
             self.deduplicator = Deduplicator(self.gen_config.similarity_threshold)
+
+        # Initialize code verifier if enabled
+        self.code_verifier = None
+        if self.gen_config.enable_code_verification:
+            correction_client = model_registry.get_llm_client(self.gen_config.answer_model)
+            self.code_verifier = CodeVerifier(
+                llm_client=correction_client,
+                max_iterations=self.gen_config.code_verification_max_iterations,
+                timeout_seconds=self.gen_config.code_verification_timeout,
+            )
 
     def generate_samples(
         self, chunks_by_category: dict[str, list[Chunk]], progress_callbacks: dict = None
@@ -83,61 +100,175 @@ class GenerationPipeline:
     async def _generate_all_samples_async(
         self, chunks_by_category: dict[str, list[Chunk]], progress_callbacks: dict = None
     ) -> list[Sample]:
-        """Generate all samples in a single async context with full batching."""
-        # Get chunk-aware distribution (no weights, purely based on chunk availability)
-        target_distribution = self.category_manager.get_target_distribution(
-            self.gen_config.target_samples, chunks_by_category
-        )
+        """Generate all samples in a single async context with full batching and retry loop."""
 
-        print("\n[Sample distribution (chunk-aware)]")
-        print("Category -> Target samples:")
-        for cat in sorted(target_distribution.keys()):
-            target = target_distribution.get(cat, 0)
-            chunks = len(chunks_by_category.get(cat, []))
-            if target > 0:
-                print(f"  {cat}: {target} samples (from {chunks} chunks)")
+        final_samples = []
+        target_samples = self.gen_config.target_samples
+        max_attempts = 5
+        attempt = 0
 
-        # Prepare all sample specifications across all categories
-        print("\nPreparing sample generation plan...")
-        all_sample_specs = []
+        # Pre-calculate chunk pools per category
+        chunk_pools = {}
+        for cat, chunks in chunks_by_category.items():
+            mm_chunks = [
+                c for c in chunks if c.images and any(img.transcription for img in c.images)
+            ]
+            txt_chunks = chunks  # All chunks can be text chunks
+            chunk_pools[cat] = {"mm": mm_chunks, "txt": txt_chunks}
 
-        for category, target_count in target_distribution.items():
-            category_chunks = chunks_by_category.get(category, [])
+        while len(final_samples) < target_samples and attempt < max_attempts:
+            needed = target_samples - len(final_samples)
+            # Add buffer for rejections (20% buffer or at least 5 samples)
+            batch_target = int(needed * 1.2) + 5
 
-            if not category_chunks or target_count == 0:
-                continue
+            print(
+                f"\n[Attempt {attempt+1}/{max_attempts}] Generating batch of ~{batch_target} samples (Needed: {needed})"
+            )
 
-            # Get question type distribution for this category
-            question_types = self._get_question_type_distribution(target_count)
+            # Get distribution for this batch
+            target_distribution = self.category_manager.get_target_distribution(
+                batch_target, chunks_by_category
+            )
 
-            # Create list of question types to cycle through
-            qtype_list = []
-            for qtype, type_count in question_types.items():
-                qtype_list.extend([qtype] * type_count)
+            # Prepare sample specifications
+            all_sample_specs = []
 
-            random.shuffle(qtype_list)
-            qtype_list = qtype_list[:target_count]
+            for category, cat_target in target_distribution.items():
+                if cat_target == 0:
+                    continue
 
-            # Create sample specifications
-            for qtype in qtype_list:
-                chunk = random.choice(category_chunks)
-                all_sample_specs.append(
-                    {
-                        "chunk": chunk,
-                        "category": category,
-                        "question_type": qtype,
-                    }
+                pools = chunk_pools.get(category)
+                if not pools:
+                    continue
+
+                # Determine MM vs Text split for this category in this batch
+                # We aim for the configured ratio
+                n_mm = int(cat_target * self.gen_config.multimodal_ratio)
+                n_txt = cat_target - n_mm
+
+                # Adjust if pools are empty
+                if not pools["mm"]:
+                    n_txt += n_mm
+                    n_mm = 0
+
+                # Select chunks
+                selected_mm_chunks = []
+                if n_mm > 0 and pools["mm"]:
+                    # Sampling with replacement if needed
+                    selected_mm_chunks = random.choices(pools["mm"], k=n_mm)
+
+                selected_txt_chunks = []
+                if n_txt > 0 and pools["txt"]:
+                    selected_txt_chunks = random.choices(pools["txt"], k=n_txt)
+
+                # Create batch items
+                batch_items = []
+                for c in selected_mm_chunks:
+                    batch_items.append({"chunk": c, "use_image": True, "category": category})
+                for c in selected_txt_chunks:
+                    batch_items.append({"chunk": c, "use_image": False, "category": category})
+
+                # Now assign question types
+                # We need to ensure CAPTION types get use_image=True
+                # And others get distributed
+
+                # Get distribution of types for this category's batch
+                type_dist = self._get_question_type_distribution(len(batch_items))
+                types_list = []
+                for qt, count in type_dist.items():
+                    types_list.extend([qt] * count)
+                random.shuffle(types_list)
+
+                # Assign types to items
+                # Priority: CAPTION must go to items with use_image=True
+
+                # Separate items
+                mm_items = [x for x in batch_items if x["use_image"]]
+                txt_items = [x for x in batch_items if not x["use_image"]]
+
+                final_cat_specs = []
+
+                # Iterate through types and assign to compatible items
+                for qtype in types_list:
+                    if qtype == QuestionType.CAPTION:
+                        if mm_items:
+                            item = mm_items.pop()
+                            item["question_type"] = qtype
+                            final_cat_specs.append(item)
+                        else:
+                            # No MM items left for caption, swap to another type or skip?
+                            # Swap to QA
+                            if txt_items:
+                                item = txt_items.pop()
+                                item["question_type"] = QuestionType.QA
+                                final_cat_specs.append(item)
+                            elif mm_items:  # Should not happen given check above
+                                item = mm_items.pop()
+                                item["question_type"] = QuestionType.QA
+                                final_cat_specs.append(item)
+                    else:
+                        if txt_items:
+                            item = txt_items.pop()
+                            item["question_type"] = qtype
+                            final_cat_specs.append(item)
+                        elif mm_items:
+                            item = mm_items.pop()
+                            item["question_type"] = qtype
+                            final_cat_specs.append(item)
+
+                all_sample_specs.extend(final_cat_specs)
+
+            if not all_sample_specs:
+                print("No samples to generate in this batch.")
+                break
+
+            print(f"Generating {len(all_sample_specs)} samples...")
+
+            # Generate batch
+            batch_samples = await self._batch_generate_all_samples(
+                all_sample_specs, progress_callbacks
+            )
+
+            if self.code_verifier:
+                print(f"Verifying code in {len(batch_samples)} samples...")
+                verified_samples, code_failures = await self._verify_code_batch(batch_samples)
+
+                if code_failures:
+                    print(
+                        f"  ⚠ Code verification: {len(code_failures)} samples failed verification"
+                    )
+                    # Save failed samples for debugging
+                    if progress_callbacks and "save_code_failures" in progress_callbacks:
+                        progress_callbacks["save_code_failures"](code_failures)
+
+                batch_samples = verified_samples
+
+            # Curate batch
+            if self.gen_config.enable_curate_filtering:
+
+                curated_samples, rejected = await self._curate_samples_async(
+                    batch_samples,
+                    progress_callbacks.get("curation") if progress_callbacks else None,
                 )
 
-        print(f"Total samples to generate: {len(all_sample_specs)}")
+                if progress_callbacks and "save_rejected" in progress_callbacks:
+                    progress_callbacks["save_rejected"](rejected)
 
-        # Generate all samples in batches
-        all_samples = await self._batch_generate_all_samples(all_sample_specs, progress_callbacks)
+                final_samples.extend(curated_samples)
+            else:
+                final_samples.extend(batch_samples)
 
-        # Close async clients to avoid event loop issues
+            print(f"Progress: {len(final_samples)}/{target_samples} samples generated.")
+            attempt += 1
+
+            # If we have enough, trim excess
+            if len(final_samples) >= target_samples:
+                final_samples = final_samples[:target_samples]
+                break
+
         await self._cleanup_async_clients()
 
-        return all_samples
+        return final_samples
 
     async def _batch_generate_all_samples(
         self, sample_specs: list[dict], progress_callbacks: dict = None
@@ -146,80 +277,71 @@ class GenerationPipeline:
         Generate all samples with full batching across categories.
 
         Args:
-            sample_specs: List of sample specifications with chunk, category, question_type
+            sample_specs: List of sample specifications with chunk, category, question_type, use_image
+            progress_callbacks: Dict of callbacks
 
         Returns:
             List of generated samples
         """
-        total_samples = len(sample_specs)
-        print(f"\nGenerating {total_samples} samples in batches...")
-
-        # Step 1: Determine which samples will be multimodal
-        # Ensure we hit the target multimodal ratio across all samples
-        target_multimodal = int(total_samples * self.gen_config.multimodal_ratio)
-
-        # Identify samples that can be multimodal (have images)
-        multimodal_candidates = []
-        non_multimodal = []
-
-        for i, spec in enumerate(sample_specs):
-            chunk = spec["chunk"]
-            images_with_transcription = [img for img in chunk.images if img.transcription]
-
-            # Caption questions MUST have images
-            if spec["question_type"] == QuestionType.CAPTION:
-                if images_with_transcription:
-                    multimodal_candidates.append(i)
-                # Skip caption questions without images
-            elif images_with_transcription:
-                multimodal_candidates.append(i)
-            else:
-                non_multimodal.append(i)
-
-        # Randomly select which samples will use images to hit target ratio
-        random.shuffle(multimodal_candidates)
-        multimodal_indices = set(multimodal_candidates[:target_multimodal])
-
-        # Step 2: Prepare question generation inputs
+        # Step 1: Prepare question generation inputs
         question_inputs = []
         spec_metadata = []
 
         for i, spec in enumerate(sample_specs):
             chunk = spec["chunk"]
             question_type = spec["question_type"]
+            use_image = spec.get("use_image", False)
 
             images_with_transcription = [img for img in chunk.images if img.transcription]
 
-            # Determine if this sample should use image based on our pre-selection
-            use_image = i in multimodal_indices
+            # Validation: if use_image is True, we must have images
+            if use_image and not images_with_transcription:
+                # Fallback to text-only if something went wrong
+                use_image = False
 
-            # Skip caption questions without images
-            if question_type == QuestionType.CAPTION and not images_with_transcription:
-                continue
-
+            # Get appropriate prompt template
             prompt_template = self.prompts.get_question_prompt(question_type)
 
-            # Build context with code if available
-            context = chunk.text[: self.gen_config.max_context_length]
-            if chunk.code_blocks:
-                code = "\n\n".join(chunk.code_blocks[:2])
-                context = f"{context}\n\nCode example:\n```python\n{code}\n```"
+            # Build context - IMAGE FIRST if available, then text context
+            context_parts = []
 
-            kwargs = {"context": context}
+            # 1. Add image description FIRST if using image
+            if use_image and images_with_transcription:
+                context_parts.append(
+                    f"[Image description]\n{images_with_transcription[0].transcription}\n"
+                )
 
+            # 2. Add text context
+            if chunk.previous_chunk_text:
+                context_parts.append(f"[Previous context]\n{chunk.previous_chunk_text}\n")
+
+            context_parts.append(chunk.text[: self.gen_config.max_context_length])
+
+            if chunk.next_chunk_text:
+                context_parts.append(f"\n[Next context]\n{chunk.next_chunk_text}")
+
+            # 3. Add all code from document
+            if chunk.extended_code_context:
+                context_parts.append(
+                    f"\n[All code in document]\n```python\n{chunk.extended_code_context}\n```"
+                )
+
+            context = "\n".join(context_parts)
+
+            # Special handling for caption - image description is required
             if question_type == QuestionType.CAPTION:
-                kwargs["image_description"] = images_with_transcription[0].transcription
-            elif use_image and images_with_transcription:
-                kwargs["image_description"] = images_with_transcription[0].transcription
+                if not images_with_transcription:
+                    continue  # Skip caption questions without images
+                user_prompt = prompt_template.format(
+                    image_description=images_with_transcription[0].transcription, context=context
+                )
+            else:
+                user_prompt = prompt_template.format(context=context)
 
-            user_prompt = prompt_template.format(**kwargs)
+            system_prompt = self.prompts.get_question_system_prompt(use_image=use_image)
 
-            # Add system prompt for question generation
             messages = [
-                Message(
-                    role="system",
-                    content="You generate natural, direct questions as a real user would ask. Be concise and objective.",
-                ),
+                Message(role="system", content=system_prompt),
                 Message(role="user", content=user_prompt),
             ]
             question_inputs.append(messages)
@@ -235,22 +357,14 @@ class GenerationPipeline:
         # Step 2: Generate all questions in batch
         question_client = self.model_registry.get_llm_client(self.gen_config.question_model)
 
-        # Set total and get progress callback for questions
-        if progress_callbacks:
-            set_total = progress_callbacks.get("set_questions_total")
-            if set_total:
-                set_total(len(question_inputs))
-            question_progress = progress_callbacks.get("questions")
-        else:
-            question_progress = None
+        if progress_callbacks and "set_questions_total" in progress_callbacks:
+            progress_callbacks["set_questions_total"](len(question_inputs))
 
         questions = await question_client.generate_batch_async(
             question_inputs,
             max_concurrent=self.gen_config.llm_concurrency,
-            progress_callback=question_progress,
+            progress_callback=progress_callbacks.get("questions") if progress_callbacks else None,
         )
-
-        print(f"  ✓ Generated {len(questions)} questions")
 
         # Step 3: Prepare answer generation inputs
         answer_inputs = []
@@ -262,46 +376,59 @@ class GenerationPipeline:
                 continue
 
             chunk = meta["chunk"]
-            question_type = meta["question_type"]
 
-            # Build context with code if available
-            context = chunk.text[: self.gen_config.max_context_length]
-            if chunk.code_blocks:
-                code = "\n\n".join(chunk.code_blocks)
-                context = f"{context}\n\nCode example:\n```python\n{code}\n```"
+            # Build context for answer generation - IMAGE FIRST if available
+            context_parts = []
 
-            # Add image context if available
+            # 1. Add image description FIRST if available
             if meta["use_image"] and meta["images_with_transcription"]:
-                context = f"{context}\n\nImage description: {meta['images_with_transcription'][0].transcription}"
+                context_parts.append(
+                    f"[Image description]\n{meta['images_with_transcription'][0].transcription}\n"
+                )
+
+            # 2. Add text context
+            if chunk.previous_chunk_text:
+                context_parts.append(f"[Previous context]\n{chunk.previous_chunk_text}\n")
+
+            context_parts.append(chunk.text[: self.gen_config.max_context_length])
+
+            if chunk.next_chunk_text:
+                context_parts.append(f"\n[Next context]\n{chunk.next_chunk_text}")
+
+            # 3. Add all code from document
+            if chunk.extended_code_context:
+                context_parts.append(
+                    f"\n[All code in document - use this for reference]\n```python\n{chunk.extended_code_context}\n```"
+                )
+
+            context = "\n".join(context_parts)
 
             user_prompt = self.prompts.answer_generation.format(
                 question=question,
                 context=context,
             )
 
-            messages = [Message(role="user", content=user_prompt)]
+            # Get appropriate system prompt (enhanced if using image)
+            system_prompt = self.prompts.get_answer_system_prompt(use_image=meta["use_image"])
+
+            messages = [
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=user_prompt),
+            ]
             answer_inputs.append(messages)
             valid_specs.append((i, meta, question))
 
         # Step 4: Generate all answers in batch
         answer_client = self.model_registry.get_llm_client(self.gen_config.answer_model)
 
-        # Set total and get progress callback for answers
-        if progress_callbacks:
-            set_total = progress_callbacks.get("set_answers_total")
-            if set_total:
-                set_total(len(answer_inputs))
-            answer_progress = progress_callbacks.get("answers")
-        else:
-            answer_progress = None
+        if progress_callbacks and "set_answers_total" in progress_callbacks:
+            progress_callbacks["set_answers_total"](len(answer_inputs))
 
         answers = await answer_client.generate_batch_async(
             answer_inputs,
             max_concurrent=self.gen_config.llm_concurrency,
-            progress_callback=answer_progress,
+            progress_callback=progress_callbacks.get("answers") if progress_callbacks else None,
         )
-
-        print(f"  ✓ Generated {len(answers)} answers")
 
         # Step 5: Build initial samples
         initial_samples = []
@@ -328,20 +455,6 @@ class GenerationPipeline:
             )
             initial_samples.append(sample)
 
-        # Step 6: Curate all samples in batch
-        if initial_samples:
-            # Set total and get progress callback for curation
-            if progress_callbacks:
-                set_total = progress_callbacks.get("set_curation_total")
-                if set_total:
-                    set_total(len(initial_samples))
-                curation_progress = progress_callbacks.get("curation")
-            else:
-                curation_progress = None
-
-            curated_samples = await self._curate_samples_async(initial_samples, curation_progress)
-            return curated_samples
-
         return initial_samples
 
     async def _cleanup_async_clients(self):
@@ -361,7 +474,7 @@ class GenerationPipeline:
             try:
                 vision_client = self.model_registry.get_vlm_client(self.gen_config.vision_model)
                 await vision_client.aclose()
-            except Exception:
+            except (AttributeError, KeyError, ValueError):
                 pass  # Vision model may not be configured
 
     def _get_question_type_distribution(self, total_samples: int) -> dict[QuestionType, int]:
@@ -383,60 +496,187 @@ class GenerationPipeline:
 
         return distribution
 
-    async def _curate_samples_async(
-        self, samples: list[Sample], progress_callback=None
-    ) -> list[Sample]:
+    def _parse_curation_response(self, response: str) -> tuple[str, str]:
         """
-        Filter samples using binary quality check.
+        Parse curation response.
 
         Args:
-            samples: Initial samples to filter
+            response: Model response
+
+        Returns:
+            Tuple of (decision, reason) where decision is "PASS" or "REJECT"
+        """
+        response = response.strip()
+        response_upper = response.upper()
+
+        # Initialize defaults
+        decision = None
+        reason = "No reason provided"
+
+        # Try structured format
+        lines = response.split("\n")
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            line_upper = line_stripped.upper()
+
+            if "DECISION" in line_upper or "DEC" in line_upper:
+                # Extract decision value after colon or space
+                if ":" in line_stripped:
+                    decision_text = line_stripped.split(":", 1)[1].strip().upper()
+                else:
+                    decision_text = line_stripped.upper()
+
+                if "PASS" in decision_text or "YES" in decision_text:
+                    decision = "PASS"
+                elif "REJECT" in decision_text or "NO" in decision_text:
+                    decision = "REJECT"
+
+            elif "REASON" in line_upper:
+                if ":" in line_stripped:
+                    reason = line_stripped.split(":", 1)[1].strip()
+                else:
+                    if i + 1 < len(lines):
+                        reason = lines[i + 1].strip()
+
+        # Fallback 1: Check if entire response starts with PASS/REJECT/YES/NO
+        if decision is None:
+            if response_upper.startswith("PASS") or response_upper.startswith("YES"):
+                decision = "PASS"
+            elif response_upper.startswith("REJECT") or response_upper.startswith("NO"):
+                decision = "REJECT"
+
+        # Fallback 2: Search for PASS/REJECT/YES/NO anywhere
+        if decision is None:
+            pass_count = response_upper.count("PASS") + response_upper.count("YES")
+            reject_count = response_upper.count("REJECT") + response_upper.count("NO")
+
+            if pass_count > reject_count:
+                decision = "PASS"
+            elif reject_count > pass_count:
+                decision = "REJECT"
+
+        # Default to REJECT if still unclear
+        if decision is None:
+            decision = "REJECT"
+            reason = "Unclear response format"
+
+        return decision, reason
+
+    async def _curate_samples_async(
+        self, samples: list[Sample], progress_callback=None
+    ) -> tuple[list[Sample], list[dict]]:
+        """
+        Comprehensive quality validation for all sample types.
+
+        Checks correctness, quality, relevance, and educational value.
+
+        Args:
+            samples: Initial samples to validate
             progress_callback: Optional callback function(completed_count)
 
         Returns:
-            Filtered samples that passed quality check
+            Tuple of (validated samples that passed, rejected samples with reasons)
         """
-        # Prepare quality check prompts
         quality_inputs = []
-        curation_prompt_template = self.prompts.qa_curation
+        curation_prompt_template = self.prompts.sample_curation
 
         for sample in samples:
             user_prompt = curation_prompt_template.format(
                 question=sample.question,
                 answer=sample.answer,
+                question_type=sample.question_type,
+                has_image="yes" if sample.image_path else "no",
             )
 
             messages = [
-                Message(
-                    role="system",
-                    content="Reasoning: low. You are a quality control filter. Respond only with PASS or REJECT.",
-                ),
+                Message(role="system", content=self.prompts.sample_curation_system),
                 Message(role="user", content=user_prompt),
             ]
             quality_inputs.append(messages)
 
-        # Batch quality check using curate model
+        # Batch quality validation
         curate_client = self.model_registry.get_llm_client(self.gen_config.curate_model)
         quality_responses = await curate_client.generate_batch_async(
             quality_inputs,
             max_concurrent=self.gen_config.llm_concurrency,
-            temperature=0.0,
+            temperature=0.1,
             progress_callback=progress_callback,
         )
 
-        # Filter samples based on responses
-        filtered_samples = []
-        passed_count = 0
-        rejected_count = 0
+        # Filter samples and collect detailed rejection info
+        validated_samples = []
+        rejected_samples = []
 
         for sample, response in zip(samples, quality_responses):
-            decision = response.strip().upper()
-            if "PASS" in decision:
-                filtered_samples.append(sample)
-                passed_count += 1
+            decision, reason = self._parse_curation_response(response)
+
+            if decision == "PASS":
+                validated_samples.append(sample)
             else:
-                rejected_count += 1
+                rejected_samples.append(
+                    {
+                        "question": sample.question,
+                        "answer": sample.answer,
+                        "category": sample.category,
+                        "question_type": sample.question_type,
+                        "image_path": sample.image_path,
+                        "source_path": sample.source_path,
+                        "rejection_reason": reason,
+                        "full_response": response,
+                    }
+                )
 
-        print(f"  ✓ Quality filter: {passed_count} passed, {rejected_count} rejected")
+        passed = len(validated_samples)
+        rejected = len(rejected_samples)
+        print(f"  ✓ Quality validation: {passed} passed, {rejected} rejected")
 
-        return filtered_samples
+        return validated_samples, rejected_samples
+
+    async def _verify_code_batch(self, samples: list[Sample]) -> tuple[list[Sample], list[dict]]:
+        """
+        Verify and correct code in a batch of samples.
+
+        Args:
+            samples: List of samples to verify
+
+        Returns:
+            Tuple of (verified samples, failed samples)
+        """
+        verified_samples = []
+        failed_samples = []
+        corrected_count = 0
+
+        for sample in samples:
+            # Only verify samples that likely contain code
+            if sample.question_type in ["code", "qa"]:
+                result = self.code_verifier.verify_and_correct_sample(
+                    sample.answer, question=sample.question
+                )
+
+                if result.is_valid:
+                    # Update sample if code was corrected
+                    if result.corrected_code:
+                        sample.answer = result.corrected_code
+                        corrected_count += 1
+                    verified_samples.append(sample)
+                else:
+                    failed_samples.append(
+                        {
+                            "question": sample.question,
+                            "answer": sample.answer,
+                            "category": sample.category,
+                            "question_type": sample.question_type,
+                            "source_path": sample.source_path,
+                            "error_type": result.error_type,
+                            "error_message": result.error_message,
+                            "iterations_used": result.iterations_used,
+                        }
+                    )
+            else:
+                # Non-code samples pass through
+                verified_samples.append(sample)
+
+        if corrected_count > 0:
+            print(f"  ✓ Code verification: {corrected_count} samples auto-corrected")
+
+        return verified_samples, failed_samples

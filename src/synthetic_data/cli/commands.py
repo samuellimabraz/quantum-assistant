@@ -732,12 +732,15 @@ def generate(
     )
 
     pipeline_steps = "Question → Answer"
+    if config.generation.enable_code_verification:
+        pipeline_steps += " → Code Verification"
     if config.generation.enable_curate_filtering:
-        pipeline_steps += " → Quality Filter"
+        pipeline_steps += " → Quality Validation"
     console.print(f"[cyan]Generation pipeline: {pipeline_steps}[/cyan]\n")
 
-    # Storage for rejected samples
+    # Storage for rejected samples and code failures
     rejected_samples_list = []
+    code_failures_list = []
 
     with Progress(
         SpinnerColumn(),
@@ -750,7 +753,7 @@ def generate(
         # Create tasks for each substep (will update totals dynamically)
         questions_task = progress.add_task("Generating questions...", total=None)
         answers_task = progress.add_task("Generating answers...", total=None)
-        curation_task = progress.add_task("Quality filtering...", total=None)
+        curation_task = progress.add_task("Validating quality...", total=None)
 
         # Progress callbacks to update progress bars
         def set_questions_total(total):
@@ -774,6 +777,9 @@ def generate(
         def save_rejected(rejected):
             rejected_samples_list.extend(rejected)
 
+        def save_code_failures(failures_batch):
+            code_failures_list.extend(failures_batch)
+
         progress_callbacks = {
             "set_questions_total": set_questions_total,
             "questions": update_question_progress,
@@ -782,6 +788,7 @@ def generate(
             "set_curation_total": set_curation_total,
             "curation": update_curation_progress,
             "save_rejected": save_rejected,
+            "save_code_failures": save_code_failures,
         }
 
         with ModelRegistry(config.models) as model_registry:
@@ -827,15 +834,29 @@ def generate(
             f"{output_dir / 'rejected_samples.jsonl'}[/yellow]"
         )
 
+    # Save code verification failures for debugging
+    if code_failures_list:
+        with open(output_dir / "code_verification_failures.jsonl", "w") as f:
+            for failure in code_failures_list:
+                json.dump(failure, f, ensure_ascii=False, indent=None)
+                f.write("\n")
+
+        console.print(
+            f"[yellow]ℹ {len(code_failures_list)} code verification failures saved to: "
+            f"{output_dir / 'code_verification_failures.jsonl'}[/yellow]"
+        )
+
     # Save summary
     summary = {
         "total_samples": len(samples),
         "rejected_samples": len(rejected_samples_list),
+        "code_verification_failures": len(code_failures_list),
         "multimodal_samples": sum(1 for s in samples if s.image_path),
         "text_only_samples": sum(1 for s in samples if not s.image_path),
         "by_type": {},
         "by_category": {},
         "curation_enabled": config.generation.enable_curate_filtering,
+        "code_verification_enabled": config.generation.enable_code_verification,
     }
 
     for sample in samples:
@@ -854,6 +875,8 @@ def generate(
     table.add_row("Total Samples", str(len(samples)))
     if config.generation.enable_curate_filtering:
         table.add_row("Rejected Samples", str(summary["rejected_samples"]))
+    if config.generation.enable_code_verification:
+        table.add_row("Code Verification Failures", str(summary["code_verification_failures"]))
     table.add_row("Multimodal", str(summary["multimodal_samples"]))
     table.add_row("Text-only", str(summary["text_only_samples"]))
 
@@ -874,6 +897,11 @@ def generate(
     if rejected_samples_list:
         console.print(
             f"[yellow]ℹ Review rejected samples at: {output_dir / 'rejected_samples.jsonl'}[/yellow]"
+        )
+
+    if code_failures_list:
+        console.print(
+            f"[yellow]ℹ Review code verification failures at: {output_dir / 'code_verification_failures.jsonl'}[/yellow]"
         )
 
 
@@ -912,6 +940,9 @@ def build(
     builder = DatasetBuilder(config.dataset, config.seed)
     train_samples, val_samples, test_samples = builder.stratified_build(samples)
 
+    # Print distribution analysis
+    builder.print_split_comparison(train_samples, val_samples, test_samples)
+
     # Save splits
     with open(output_dir / "train.pkl", "wb") as f:
         pickle.dump(train_samples, f)
@@ -922,15 +953,12 @@ def build(
     with open(output_dir / "test.pkl", "wb") as f:
         pickle.dump(test_samples, f)
 
-    # Save summary
+    # Save distribution statistics
     summary = {
         "total_samples": len(samples),
-        "train_samples": len(train_samples),
-        "val_samples": len(val_samples),
-        "test_samples": len(test_samples),
-        "train_percentage": len(train_samples) / len(samples) * 100,
-        "val_percentage": len(val_samples) / len(samples) * 100,
-        "test_percentage": len(test_samples) / len(samples) * 100,
+        "train": builder.get_distribution_stats(train_samples),
+        "val": builder.get_distribution_stats(val_samples),
+        "test": builder.get_distribution_stats(test_samples),
     }
 
     with open(output_dir / "summary.json", "w") as f:
@@ -940,11 +968,36 @@ def build(
     table = Table(title="Dataset Splits")
     table.add_column("Split", style="cyan")
     table.add_column("Samples", style="green", justify="right")
-    table.add_column("Percentage", style="yellow", justify="right")
+    table.add_column("Multimodal", style="yellow", justify="right")
+    table.add_column("Percentage", style="magenta", justify="right")
 
-    table.add_row("Train", str(len(train_samples)), f"{summary['train_percentage']:.1f}%")
-    table.add_row("Validation", str(len(val_samples)), f"{summary['val_percentage']:.1f}%")
-    table.add_row("Test", str(len(test_samples)), f"{summary['test_percentage']:.1f}%")
+    total = len(samples)
+    train_pct = len(train_samples) / total * 100 if total > 0 else 0
+    val_pct = len(val_samples) / total * 100 if total > 0 else 0
+    test_pct = len(test_samples) / total * 100 if total > 0 else 0
+
+    train_mm = sum(1 for s in train_samples if s.image_path)
+    val_mm = sum(1 for s in val_samples if s.image_path)
+    test_mm = sum(1 for s in test_samples if s.image_path)
+
+    table.add_row(
+        "Train",
+        str(len(train_samples)),
+        f"{train_mm} ({train_mm/len(train_samples)*100:.0f}%)" if train_samples else "0",
+        f"{train_pct:.1f}%",
+    )
+    table.add_row(
+        "Validation",
+        str(len(val_samples)),
+        f"{val_mm} ({val_mm/len(val_samples)*100:.0f}%)" if val_samples else "0",
+        f"{val_pct:.1f}%",
+    )
+    table.add_row(
+        "Test",
+        str(len(test_samples)),
+        f"{test_mm} ({test_mm/len(test_samples)*100:.0f}%)" if test_samples else "0",
+        f"{test_pct:.1f}%",
+    )
 
     console.print("\n")
     console.print(table)

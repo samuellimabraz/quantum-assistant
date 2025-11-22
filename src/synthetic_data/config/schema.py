@@ -53,7 +53,7 @@ class ModelEndpoint(BaseModel):
     model_name: str | None = None
     max_tokens: int = Field(default=4096, ge=1)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    service_tier: str | None = Field(default=None) 
+    service_tier: str | None = Field(default=None)
 
     @field_validator("base_url", "api_key", "model_name", mode="before")
     @classmethod
@@ -105,8 +105,8 @@ class PromptsConfig(BaseModel):
     category_classification_system: str = ""
 
     # Curation prompts
-    qa_curation: str
-    qa_curation_system: str = ""
+    sample_curation: str = ""
+    sample_curation_system: str = ""
 
     # VLM prompts
     image_transcription: str
@@ -143,6 +143,11 @@ class GenerationConfig(BaseModel):
     enable_curate_filtering: bool = Field(default=True)
     enable_deduplication: bool = Field(default=True)
     similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+    # Code verification settings
+    enable_code_verification: bool = Field(default=False)
+    code_verification_max_iterations: int = Field(default=3, ge=1, le=10)
+    code_verification_timeout: int = Field(default=30, ge=5, le=120)
 
 
 class DatasetConfig(BaseModel):
@@ -183,7 +188,7 @@ class PipelineConfig(BaseModel):
         """Load configuration from YAML file."""
         import yaml
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         return cls(**data)
@@ -192,5 +197,5 @@ class PipelineConfig(BaseModel):
         """Save configuration to YAML file."""
         import yaml
 
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.model_dump(mode="python"), f, default_flow_style=False)

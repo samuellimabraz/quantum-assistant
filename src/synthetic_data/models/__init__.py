@@ -33,6 +33,7 @@ class SyntheticDataModelRegistry(ModelRegistry):
                     model_name=endpoint.model_name,
                     max_tokens=endpoint.max_tokens,
                     temperature=endpoint.temperature,
+                    service_tier=endpoint.service_tier,
                 )
             )
 
