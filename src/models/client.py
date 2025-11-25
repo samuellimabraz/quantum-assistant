@@ -181,7 +181,7 @@ class LLMClient:
                 except Exception as e:
                     print(f"Error processing batch item {idx}: {e}")
                     result = ""
-                
+
                 async with lock:
                     results[idx] = result
                     completed_count += 1
@@ -258,7 +258,7 @@ class VLMClient(LLMClient):
         else:
             if str(image_path).lower().endswith(".avif"):
                 try:
-                    import pillow_avif 
+                    import pillow_avif
                 except ImportError:
                     raise ImportError(
                         "pillow-avif required for AVIF. Install with: pip install pillow-avif"
@@ -299,6 +299,7 @@ class VLMClient(LLMClient):
         self,
         text: str,
         image_path: Path | str,
+        system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         save_debug: bool = False,
@@ -306,23 +307,30 @@ class VLMClient(LLMClient):
         """Generate text completion with image input."""
         image_data = self._process_image(image_path, save_debug=save_debug)
 
-        message = Message(
-            role="user",
-            content=[
-                {"type": "text", "text": text},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
-                },
-            ],
+        messages = []
+        if system_prompt:
+            messages.append(Message(role="system", content=system_prompt))
+
+        messages.append(
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
+                    },
+                ],
+            )
         )
 
-        return self.generate(messages=[message], max_tokens=max_tokens, temperature=temperature)
+        return self.generate(messages=messages, max_tokens=max_tokens, temperature=temperature)
 
     async def generate_with_image_async(
         self,
         text: str,
         image_path: Path | str,
+        system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         save_debug: bool = False,
@@ -330,24 +338,31 @@ class VLMClient(LLMClient):
         """Generate text completion with image input asynchronously."""
         image_data = self._process_image(image_path, save_debug=save_debug)
 
-        message = Message(
-            role="user",
-            content=[
-                {"type": "text", "text": text},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
-                },
-            ],
+        messages = []
+        if system_prompt:
+            messages.append(Message(role="system", content=system_prompt))
+
+        messages.append(
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
+                    },
+                ],
+            )
         )
 
         return await self.generate_async(
-            messages=[message], max_tokens=max_tokens, temperature=temperature
+            messages=messages, max_tokens=max_tokens, temperature=temperature
         )
 
     async def generate_batch_with_images_async(
         self,
         prompts: list[tuple[str, Path]],
+        system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         max_concurrent: int = 8,
@@ -358,6 +373,7 @@ class VLMClient(LLMClient):
 
         Args:
             prompts: List of (text, image_path) tuples
+            system_prompt: Optional system prompt to use for all requests
             max_tokens: Override max tokens
             temperature: Override temperature
             max_concurrent: Maximum concurrent requests (lower for VLM)
@@ -376,12 +392,12 @@ class VLMClient(LLMClient):
             async with semaphore:
                 try:
                     result = await self.generate_with_image_async(
-                        text, image_path, max_tokens, temperature
+                        text, image_path, system_prompt, max_tokens, temperature
                     )
                 except Exception as e:
                     print(f"Error processing image {image_path}: {e}")
                     result = ""
-                
+
                 async with lock:
                     results[idx] = result
                     completed_count += 1
@@ -396,11 +412,14 @@ class VLMClient(LLMClient):
     def generate_batch_with_images(
         self,
         prompts: list[tuple[str, Path]],
+        system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         max_concurrent: int = 4,
     ) -> list[str]:
         """Generate completions for multiple image+text inputs (sync wrapper)."""
         return asyncio.run(
-            self.generate_batch_with_images_async(prompts, max_tokens, temperature, max_concurrent)
+            self.generate_batch_with_images_async(
+                prompts, system_prompt, max_tokens, temperature, max_concurrent
+            )
         )
