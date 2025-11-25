@@ -1,8 +1,8 @@
 """Code verification and correction system for generated samples."""
 
 import ast
+import asyncio
 import re
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -52,9 +52,11 @@ class CodeVerifier:
         self.max_iterations = max_iterations
         self.timeout_seconds = timeout_seconds
 
-    def verify_and_correct_sample(self, text: str, question: str = "") -> CodeVerificationResult:
+    async def verify_and_correct_sample_async(
+        self, text: str, question: str = ""
+    ) -> CodeVerificationResult:
         """
-        Verify and correct code in a sample's answer.
+        Verify and correct code in a sample's answer (async version).
 
         Args:
             text: The text containing code blocks
@@ -73,7 +75,7 @@ class CodeVerifier:
         if not main_code:
             return CodeVerificationResult(is_valid=True)
 
-        error_info = self._verify_code(main_code)
+        error_info = await self._verify_code_async(main_code)
 
         if not error_info:
             return CodeVerificationResult(is_valid=True)
@@ -85,7 +87,7 @@ class CodeVerifier:
         for iteration in range(self.max_iterations):
             iterations = iteration + 1
 
-            corrected_code = self._request_correction(
+            corrected_code = await self._request_correction_async(
                 code=corrected_code,
                 error_message=error_info["message"],
                 error_type=error_info["type"],
@@ -97,7 +99,7 @@ class CodeVerifier:
             if not corrected_code:
                 break
 
-            error_info = self._verify_code(corrected_code)
+            error_info = await self._verify_code_async(corrected_code)
 
             if not error_info:
                 corrected_text = self._replace_code_in_text(text, main_code, corrected_code)
@@ -151,28 +153,6 @@ class CodeVerifier:
 
         return max(code_blocks, key=len)
 
-    def _verify_code(self, code: str) -> Optional[dict]:
-        """
-        Verify Python code for errors.
-
-        Args:
-            code: Python code string
-
-        Returns:
-            Dict with error info if invalid, None if valid
-        """
-        # Step 1: Check syntax
-        syntax_error = self._check_syntax(code)
-        if syntax_error:
-            return {"type": "syntax", "message": syntax_error}
-
-        # Step 2: Try to execute (catches import errors, undefined names, etc.)
-        execution_error = self._check_execution(code)
-        if execution_error:
-            return {"type": "execution", "message": execution_error}
-
-        return None
-
     def _check_syntax(self, code: str) -> Optional[str]:
         """
         Check Python syntax.
@@ -191,9 +171,31 @@ class CodeVerifier:
         except Exception as e:
             return f"Parsing error: {str(e)}"
 
-    def _check_execution(self, code: str) -> Optional[str]:
+    async def _verify_code_async(self, code: str) -> Optional[dict]:
         """
-        Check code execution (with safety constraints).
+        Verify Python code for errors (async version).
+
+        Args:
+            code: Python code string
+
+        Returns:
+            Dict with error info if invalid, None if valid
+        """
+        # Step 1: Check syntax (synchronous, fast)
+        syntax_error = self._check_syntax(code)
+        if syntax_error:
+            return {"type": "syntax", "message": syntax_error}
+
+        # Step 2: Try to execute (async)
+        execution_error = await self._check_execution_async(code)
+        if execution_error:
+            return {"type": "execution", "message": execution_error}
+
+        return None
+
+    async def _check_execution_async(self, code: str) -> Optional[str]:
+        """
+        Check code execution asynchronously.
 
         Args:
             code: Python code string
@@ -206,32 +208,40 @@ class CodeVerifier:
             temp_path = f.name
 
         try:
-            result = subprocess.run(
-                [sys.executable, temp_path],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                temp_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
 
-            if result.returncode != 0:
-                stderr = result.stderr.strip()
-                error_lines = stderr.split("\n")
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return f"Execution timeout (>{self.timeout_seconds}s)"
+
+            if process.returncode != 0:
+                stderr_text = stderr.decode("utf-8").strip()
+                error_lines = stderr_text.split("\n")
                 relevant_error = next(
-                    (line for line in reversed(error_lines) if "Error:" in line), stderr
+                    (line for line in reversed(error_lines) if "Error:" in line),
+                    stderr_text,
                 )
                 return f"Execution error: {relevant_error}"
 
             return None
 
-        except subprocess.TimeoutExpired:
-            return f"Execution timeout (>{self.timeout_seconds}s)"
         except (OSError, IOError) as e:
             return f"Execution error: {str(e)}"
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
-    def _request_correction(
+    async def _request_correction_async(
         self,
         code: str,
         error_message: str,
@@ -317,7 +327,7 @@ Please fix the code."""
             )
 
         try:
-            response = self.llm_client.generate(messages, temperature=0.1)
+            response = await self.llm_client.generate_async(messages, temperature=0.1)
             corrected_blocks = self._extract_code_blocks(response)
 
             if corrected_blocks:
@@ -358,55 +368,3 @@ Please fix the code."""
 
         # Fallback: just replace the code itself
         return original_text.replace(old_code, new_code, 1)
-
-
-async def verify_and_correct_batch(
-    samples: list,
-    llm_client: LLMClient,
-    max_iterations: int = 3,
-    timeout_seconds: int = 30,
-) -> tuple[list, list]:
-    """
-    Verify and correct code in a batch of samples.
-
-    Args:
-        samples: List of Sample objects with code
-        llm_client: LLM client for corrections
-        max_iterations: Max correction iterations per sample
-        timeout_seconds: Execution timeout
-
-    Returns:
-        Tuple of (verified_samples, failed_samples)
-    """
-    verifier = CodeVerifier(
-        llm_client=llm_client,
-        max_iterations=max_iterations,
-        timeout_seconds=timeout_seconds,
-    )
-
-    verified_samples = []
-    failed_samples = []
-
-    for sample in samples:
-        # Only verify samples that likely contain code
-        if sample.question_type in ["code", "qa"]:
-            result = verifier.verify_and_correct_sample(sample.answer, question=sample.question)
-
-            if result.is_valid:
-                # Update sample if code was corrected
-                if result.corrected_code:
-                    sample.answer = result.corrected_code
-                verified_samples.append(sample)
-            else:
-                failed_samples.append(
-                    {
-                        "sample": sample,
-                        "error": result.error_message,
-                        "error_type": result.error_type,
-                    }
-                )
-        else:
-            # Non-code samples pass through
-            verified_samples.append(sample)
-
-    return verified_samples, failed_samples
