@@ -6,16 +6,26 @@ from datasets import Dataset, DatasetDict, Features, Image, Value
 from PIL import Image as PILImage
 
 from synthetic_data.config import DatasetConfig
-from synthetic_data.generators.pipeline import Sample
+from synthetic_data.models.types import Sample
 
 
 class HuggingFaceExporter:
-    """Export dataset to HuggingFace datasets format."""
+    """Export dataset to HuggingFace datasets format.
+    
+    Exports samples with the following structure:
+    - question: The input prompt/question
+    - answer: The reference solution/answer
+    - category: One of 14 quantum computing categories
+    - type: function_completion, code_generation, or qa
+    - test_code: Unit test for code types (null for qa)
+    - entry_point: Function name for code types (null for qa)
+    - image: Associated image for multimodal samples
+    - source: Relative path to source document
+    """
 
     def __init__(self, config: DatasetConfig):
-        """
-        Initialize exporter.
-
+        """Initialize exporter.
+        
         Args:
             config: Dataset configuration
         """
@@ -27,14 +37,13 @@ class HuggingFaceExporter:
         val_samples: list[Sample],
         test_samples: list[Sample],
     ) -> DatasetDict:
-        """
-        Export samples to HuggingFace DatasetDict.
-
+        """Export samples to HuggingFace DatasetDict.
+        
         Args:
             train_samples: Training samples
             val_samples: Validation samples
             test_samples: Test samples
-
+            
         Returns:
             DatasetDict with train/validation/test splits
         """
@@ -44,44 +53,42 @@ class HuggingFaceExporter:
         val_dataset = self._create_dataset(val_samples, features)
         test_dataset = self._create_dataset(test_samples, features)
 
-        dataset_dict = DatasetDict(
-            {
-                "train": train_dataset,
-                "validation": val_dataset,
-                "test": test_dataset,
-            }
-        )
-
-        return dataset_dict
+        return DatasetDict({
+            "train": train_dataset,
+            "validation": val_dataset,
+            "test": test_dataset,
+        })
 
     def save_to_disk(self, dataset_dict: DatasetDict) -> Path:
-        """
-        Save dataset to disk.
-
+        """Save dataset to disk.
+        
         Args:
             dataset_dict: Dataset to save
-
+            
         Returns:
             Path to saved dataset
         """
         output_path = Path(self.config.final_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # Filter out empty splits to avoid HuggingFace save_to_disk bug
-        non_empty_dict = DatasetDict(
-            {split: dataset for split, dataset in dataset_dict.items() if len(dataset) > 0}
-        )
+        # Filter out empty splits
+        non_empty_dict = DatasetDict({
+            split: dataset
+            for split, dataset in dataset_dict.items()
+            if len(dataset) > 0
+        })
 
-        # Only save if we have at least one non-empty split
         if non_empty_dict:
             non_empty_dict.save_to_disk(str(output_path))
             print(f"\nDataset saved to {output_path}")
 
             import json
-
             manifest = {
                 "splits": list(dataset_dict.keys()),
-                "split_sizes": {split: len(dataset) for split, dataset in dataset_dict.items()},
+                "split_sizes": {
+                    split: len(dataset)
+                    for split, dataset in dataset_dict.items()
+                },
             }
             with open(output_path / "manifest.json", "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
@@ -89,13 +96,11 @@ class HuggingFaceExporter:
             print("\n[Warning] All splits are empty, skipping save")
 
         self._create_dataset_card(output_path, dataset_dict)
-
         return output_path
 
     def push_to_hub(self, dataset_dict: DatasetDict) -> None:
-        """
-        Push dataset to HuggingFace Hub.
-
+        """Push dataset to HuggingFace Hub.
+        
         Args:
             dataset_dict: Dataset to push
         """
@@ -103,24 +108,21 @@ class HuggingFaceExporter:
             raise ValueError("hub_id not configured")
 
         print(f"\nPushing dataset to HuggingFace Hub: {self.config.hub_id}")
-        dataset_dict.push_to_hub(
-            self.config.hub_id,
-            private=False,
-        )
+        dataset_dict.push_to_hub(self.config.hub_id, private=False)
         print("Dataset pushed successfully!")
 
     def _create_features(self) -> Features:
         """Create HuggingFace features schema."""
-        return Features(
-            {
-                "question": Value("string"),
-                "answer": Value("string"),
-                "category": Value("string"),
-                "type": Value("string"),
-                "image": Image(),
-                "source": Value("string"),
-            }
-        )
+        return Features({
+            "question": Value("string"),
+            "answer": Value("string"),
+            "category": Value("string"),
+            "type": Value("string"),
+            "test_code": Value("string"),
+            "entry_point": Value("string"),
+            "image": Image(),
+            "source": Value("string"),
+        })
 
     def _create_dataset(self, samples: list[Sample], features: Features) -> Dataset:
         """Create HuggingFace Dataset from samples."""
@@ -129,18 +131,20 @@ class HuggingFaceExporter:
             "answer": [],
             "category": [],
             "type": [],
+            "test_code": [],
+            "entry_point": [],
             "image": [],
             "source": [],
         }
 
         for sample in samples:
-            # Ensure no None values in string fields
             data["question"].append(sample.question or "")
             data["answer"].append(sample.answer or "")
             data["category"].append(sample.category or "uncategorized")
             data["type"].append(sample.question_type or "qa")
+            data["test_code"].append(sample.test_code or "")
+            data["entry_point"].append(sample.entry_point or "")
 
-            # Convert source path to relative path
             source_relative = self._make_relative_path(sample.source_path)
             data["source"].append(source_relative or "")
 
@@ -148,11 +152,9 @@ class HuggingFaceExporter:
                 try:
                     image_path = self._resolve_image_path(sample.image_path)
                     if image_path and image_path.exists():
-                        # Load the actual image and convert to PIL Image
                         image_obj = self._load_and_convert_image(image_path)
                         data["image"].append(image_obj)
                     else:
-                        # If image doesn't exist, set to None
                         data["image"].append(None)
                 except Exception as e:
                     print(f"Warning: Failed to load image {sample.image_path}: {e}")
@@ -167,34 +169,22 @@ class HuggingFaceExporter:
         if not source_path:
             return ""
 
-        # Find the data directory marker in the path
         source_str = str(source_path)
-
-        # Look for common data directory patterns
-        patterns = [
-            "/data/",
-            "/quantum-assistant/data/",
-            "\\data\\",  # Windows path
-            "\\quantum-assistant\\data\\",  # Windows path
-        ]
+        patterns = ["/data/", "/quantum-assistant/data/", "\\data\\", "\\quantum-assistant\\data\\"]
 
         for pattern in patterns:
             if pattern in source_str:
-                # Extract everything after the pattern
                 idx = source_str.find(pattern)
-                return source_str[idx + len(pattern) :]
+                return source_str[idx + len(pattern):]
 
-        # If no pattern found, try to extract just the filename
         path = Path(source_path)
         if path.exists():
-            # Return the last two directories and filename
             parts = path.parts
             if len(parts) >= 2:
                 return str(Path(*parts[-2:]))
-            else:
-                return path.name
+            return path.name
 
-        return source_path  # Return as-is if can't convert
+        return source_path
 
     def _resolve_image_path(self, image_path: str) -> Path | None:
         """Resolve image path to absolute path."""
@@ -219,7 +209,7 @@ class HuggingFaceExporter:
         return None
 
     def _load_and_convert_image(self, image_path: Path):
-        """Load an image and convert it to a PIL Image in a standard format."""
+        """Load an image and convert to PIL Image in standard format."""
         import io
 
         try:
@@ -235,15 +225,14 @@ class HuggingFaceExporter:
                         png_blob = wand_img.make_blob("png")
                         img = PILImage.open(io.BytesIO(png_blob))
                 except ImportError:
-                    print(f"Warning: Wand not available for SVG {image_path}, skipping")
+                    print(f"Warning: Wand not available for SVG {image_path}")
                     return None
             else:
-
                 if str(image_path).lower().endswith(".avif"):
                     try:
-                        import pillow_avif
+                        import pillow_avif  # noqa: F401
                     except ImportError:
-                        print(f"Warning: pillow-avif not available for {image_path}, skipping")
+                        print(f"Warning: pillow-avif not available for {image_path}")
                         return None
                 img = PILImage.open(image_path)
 
@@ -272,12 +261,18 @@ class HuggingFaceExporter:
         test_count = len(dataset_dict["test"])
         total_count = train_count + val_count + test_count
 
-        multimodal_count = sum(1 for sample in dataset_dict["train"] if sample["image"] is not None)
+        multimodal_count = sum(
+            1 for sample in dataset_dict["train"] if sample["image"] is not None
+        )
+        code_with_tests = sum(
+            1 for sample in dataset_dict["train"] if sample["test_code"]
+        )
 
         card_content = f"""---
 license: {self.config.license}
 task_categories:
 - image-text-to-text
+- text-generation
 language:
 - en
 tags:
@@ -285,6 +280,7 @@ tags:
 - qiskit
 - synthetic
 - multimodal
+- code-generation
 size_categories:
 - {self._get_size_category(total_count)}
 ---
@@ -297,27 +293,44 @@ size_categories:
 
 ### Dataset Description
 
-This is a synthetic multimodal dataset for quantum computing assistance, with a focus on Qiskit.
-The dataset was generated from official Qiskit documentation and learning materials using a synthetic data generation pipeline.
+High-quality multimodal dataset for quantum computing VLM fine-tuning with Qiskit.
+Features three input types with unit tests for code verification.
 
 - **Total Samples:** {total_count:,}
 - **Train:** {train_count:,}
 - **Validation:** {val_count:,}
 - **Test:** {test_count:,}
 - **Multimodal Samples:** {multimodal_count:,}
+- **Samples with Unit Tests:** {code_with_tests:,}
 
 ### Dataset Structure
 
 ```python
 {{
-    "question": str,           # The question or prompt
-    "answer": str,             # The answer or response
-    "category": str,           # Knowledge category (e.g., quantum_ml_optimization)
-    "type": str,               # Type of question (qa, code, caption, summary)
-    "image": PIL.Image,        # Image (if multimodal, else None)
-    "source": str,             # Relative source document path
+    "question": str,       # Input prompt/question
+    "answer": str,         # Reference solution/answer
+    "category": str,       # Knowledge category (14 categories)
+    "type": str,           # function_completion, code_generation, or qa
+    "test_code": str,      # Unit test for code types (empty for qa)
+    "entry_point": str,    # Function name for code types
+    "image": PIL.Image,    # Image (if multimodal, else None)
+    "source": str,         # Relative source document path
 }}
 ```
+
+## Question Types
+
+### function_completion
+Prompt includes imports, function signature, and docstring.
+Model completes the function body. Includes unit test for validation.
+
+### code_generation  
+Natural language task description (Qiskit HumanEval Hard format).
+Model generates complete code with imports. Includes unit test.
+
+### qa
+Theory and concepts (explanation, summary, analysis).
+No unit test required. Code in answers is syntax/execution verified.
 
 ## Usage
 
@@ -326,56 +339,44 @@ from datasets import load_dataset
 
 dataset = load_dataset("{self.config.hub_id or 'path/to/dataset'}")
 
-# Access training data
-train_data = dataset["train"]
+# Get samples with unit tests
+with_tests = dataset["train"].filter(lambda x: x["test_code"])
 
-# Filter by category
-quantum_ml = train_data.filter(lambda x: x["category"] == "quantum_ml_optimization")
+# Get multimodal samples
+multimodal = dataset["train"].filter(lambda x: x["image"] is not None)
 
-# Get multimodal samples only
-multimodal = train_data.filter(lambda x: x["image"] is not None)
-
-# Filter by question type
-code_questions = train_data.filter(lambda x: x["type"] == "code")
+# Filter by type
+func_completion = dataset["train"].filter(lambda x: x["type"] == "function_completion")
 ```
 
 ## Categories
 
-The dataset covers 14 quantum computing topics:
-- Quantum Fundamentals
-- Quantum States & Entanglement
-- Quantum Gates & Circuits
-- Quantum Algorithms
-- Quantum ML & Optimization
-- Quantum Simulation & Hamiltonians
-- Quantum Error Correction & Noise
-- Quantum Information & Communication
-- Variational & Hybrid Approaches
-- Quantum Thermodynamics
-- Advanced Topological Concepts
-- Frameworks & Tooling
-- Hardware & Backends
-- Educational Content
-
-## Question Types
-
-- **qa**: General question-answer pairs
-- **code**: Qiskit code implementation and debugging
-- **caption**: Image interpretation and circuit description
-- **summary**: Concept summarization and explanation
+14 quantum computing categories:
+- quantum_fundamentals
+- quantum_states_entanglement
+- quantum_gates_circuits
+- quantum_algorithms
+- quantum_ml_optimization
+- quantum_simulation_hamiltonians
+- quantum_error_correction_noise
+- quantum_information_communication
+- variational_hybrid_approaches
+- quantum_thermodynamics
+- advanced_topological
+- frameworks_tooling
+- hardware_backends
+- education_meta
 
 ## License
 
-This dataset is released under the {self.config.license} license.
+Released under {self.config.license} license.
 
 ## Citation
-
-If you use this dataset, please cite:
 
 ```bibtex
 @misc{{{self.config.name.replace('-', '_')},
   title = {{{self.config.name}}},
-  author = {{Your Name}},
+  author = {{Samuel Lima Braz}},
   year = {{2025}},
   publisher = {{HuggingFace}},
   url = {{https://huggingface.co/datasets/{self.config.hub_id or 'username/dataset'}}}
@@ -399,5 +400,4 @@ If you use this dataset, please cite:
             return "10K<n<100K"
         elif count < 1000000:
             return "100K<n<1M"
-        else:
-            return "n>1M"
+        return "n>1M"

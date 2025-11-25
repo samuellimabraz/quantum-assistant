@@ -195,9 +195,7 @@ class ImageResolver:
                 ext = "jpg"
 
             # Generate unique filename
-            output_filename = (
-                f"{notebook_path.stem}_cell{cell_idx}_output{output_idx}.{ext}"
-            )
+            output_filename = f"{notebook_path.stem}_cell{cell_idx}_output{output_idx}.{ext}"
             output_path = self.images_output_dir / output_filename
 
             # Handle SVG (not base64 encoded)

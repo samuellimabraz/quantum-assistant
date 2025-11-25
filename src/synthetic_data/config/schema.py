@@ -18,20 +18,25 @@ class SourceType(str, Enum):
 
 
 class QuestionType(str, Enum):
-    """Type of question/prompt to generate."""
+    """Type of question/prompt to generate.
+    
+    Three types aligned with Qiskit HumanEval evaluation formats:
+    - FUNCTION_COMPLETION: Prompt with imports + function signature + docstring (model completes)
+    - CODE_GENERATION: Direct task description (model generates full code)
+    - QA: Theory/concepts (explanation, summary, analysis - no unit test required)
+    """
 
+    FUNCTION_COMPLETION = "function_completion"
+    CODE_GENERATION = "code_generation"
     QA = "qa"
-    CODE = "code"
-    CAPTION = "caption"
-    SUMMARY = "summary"
 
 
 class SourceConfig(BaseModel):
     """Configuration for a documentation source."""
 
-    path: str  # Can be local path or GitHub URL
+    path: str
     type: SourceType = SourceType.DIRECTORY
-    folders: list[str] = Field(default_factory=list)  # For GitHub: specific folders to process
+    folders: list[str] = Field(default_factory=list)
     include_patterns: list[str] = Field(default_factory=lambda: ["*.ipynb", "*.mdx", "*.pdf"])
     exclude_patterns: list[str] = Field(default_factory=lambda: ["**/node_modules/**"])
     max_files: int | None = Field(default=None, ge=1)
@@ -81,32 +86,32 @@ class ModelConfig(BaseModel):
 class PromptsConfig(BaseModel):
     """Prompts for different generation tasks."""
 
-    # Question generation prompts
-    question_generation: str
+    # System prompts
     question_generation_system: str = ""
-
-    # Answer generation prompts
-    answer_generation: str
     answer_generation_system: str = ""
+    test_generation_system: str = ""
+    content_filter_system: str = ""
+    image_filter_system: str = ""
+    category_classification_system: str = ""
+    sample_curation_system: str = ""
+    image_transcription_system: str = ""
 
-    # Other question types
-    summary_generation: str
-    caption_generation: str
-    code_generation: str
+    # Question type prompts (user prompts)
+    function_completion_prompt: str
+    code_generation_prompt: str
+    qa_prompt: str
+
+    # Answer generation
+    answer_with_test_prompt: str  # For code types - receives test to pass
+    answer_without_test_prompt: str  # For QA type
 
     # Quality checking prompts
     content_quality_check: str
-    content_filter_system: str = ""
     image_quality_check: str
-    image_filter_system: str = ""
 
-    # Classification prompts
+    # Classification and curation
     category_classification: str
-    category_classification_system: str = ""
-
-    # Curation prompts
     sample_curation: str = ""
-    sample_curation_system: str = ""
 
     # VLM prompts
     image_transcription: str
@@ -124,19 +129,18 @@ class GenerationConfig(BaseModel):
     classify_model: str | None = None
 
     # Async batching configuration
-    llm_batch_size: int = Field(default=10, ge=1)  # Questions/answers batch size
-    llm_concurrency: int = Field(default=20, ge=1)  # LLM concurrent requests
-    vlm_batch_size: int = Field(default=16, ge=1)  # VLM batch size
-    vlm_concurrency: int = Field(default=16, ge=1)  # VLM concurrent requests
+    llm_batch_size: int = Field(default=10, ge=1)
+    llm_concurrency: int = Field(default=20, ge=1)
+    vlm_batch_size: int = Field(default=16, ge=1)
+    vlm_concurrency: int = Field(default=16, ge=1)
 
-    batch_size: int = Field(default=10, ge=1)  # Legacy, uses llm_batch_size
     multimodal_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
 
     question_types: list[QuestionType] = Field(default_factory=lambda: list(QuestionType))
     question_type_weights: dict[QuestionType, float] = Field(default_factory=dict)
 
     max_context_length: int = Field(default=2048, ge=1)
-    chunk_overlap: int = Field(default=200, ge=0)
+    chunk_overlap: int = Field(default=0, ge=0)
 
     enable_image_transcription: bool = Field(default=True)
     enable_content_filtering: bool = Field(default=False)
@@ -144,10 +148,14 @@ class GenerationConfig(BaseModel):
     enable_deduplication: bool = Field(default=True)
     similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
 
-    # Code verification settings
-    enable_code_verification: bool = Field(default=False)
+    # Code verification settings (syntax + execution check)
+    enable_code_verification: bool = Field(default=True)
     code_verification_max_iterations: int = Field(default=3, ge=1, le=10)
     code_verification_timeout: int = Field(default=30, ge=5, le=120)
+    code_verification_concurrency: int = Field(default=5, ge=1)
+
+    # Test validation settings (for function_completion and code_generation)
+    test_validation_timeout: int = Field(default=60, ge=10, le=300)
 
 
 class DatasetConfig(BaseModel):

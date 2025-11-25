@@ -26,7 +26,7 @@ from synthetic_data.extractors import ContentChunker, DocumentIngestion, ImageTr
 from synthetic_data.generators import CategoryManager, GenerationPipeline
 from synthetic_data.models import ModelRegistry
 from synthetic_data.parsers.base import Document
-from synthetic_data.utils import PipelineCache, QualityFilter
+from synthetic_data.utils import CheckpointManager, PipelineCache, QualityFilter
 
 console = Console()
 
@@ -176,7 +176,7 @@ def transcribe(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
 ):
-    """Step 2: Transcribe images using VLM (batch async)."""
+    """Step 2: Transcribe images using VLM (batch async with checkpoints)."""
     console.print(
         Panel.fit(
             "[bold cyan]Step 2: Image Transcription[/bold cyan]\n"
@@ -207,13 +207,31 @@ def transcribe(
     # Setup output
     output_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check for existing transcriptions
     output_file = output_dir / "documents.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "transcribe")
+
+    # Check for existing final output
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Transcriptions already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-transcribe[/yellow]")
         return
+
+    # Try to resume from checkpoint
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            all_documents, _ = checkpoint_data
+            already_transcribed = sum(
+                1 for doc in all_documents for img in doc.images if img.transcription
+            )
+            if already_transcribed > 0:
+                console.print(
+                    f"[cyan]Resuming from checkpoint: "
+                    f"{already_transcribed} images already transcribed[/cyan]"
+                )
 
     # Count images needing transcription
     images_to_transcribe = sum(
@@ -228,6 +246,7 @@ def transcribe(
         # Save as-is
         with open(output_file, "wb") as f:
             pickle.dump(all_documents, f)
+        checkpoint_manager.clear_checkpoint()
         return
 
     console.print(f"[cyan]Found {images_to_transcribe} images to transcribe[/cyan]")
@@ -236,7 +255,7 @@ def transcribe(
         f"concurrency={config.generation.vlm_concurrency}[/cyan]"
     )
 
-    # Transcribe images
+    # Transcribe images with checkpoints
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -245,11 +264,31 @@ def transcribe(
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Transcribing images...", total=images_to_transcribe)
+        # Count already transcribed
+        already_transcribed = sum(
+            1 for doc in all_documents for img in doc.images if img.transcription
+        )
+
+        task = progress.add_task(
+            "Transcribing images...",
+            total=images_to_transcribe + already_transcribed,
+            completed=already_transcribed,
+        )
 
         # Progress callback
         def update_transcription_progress(completed):
-            progress.update(task, completed=completed)
+            progress.update(task, completed=already_transcribed + completed)
+
+        # Checkpoint callback
+        def save_checkpoint(documents):
+            transcribed_count = sum(
+                1 for doc in documents for img in doc.images if img.transcription
+            )
+            metadata = {
+                "transcribed_count": transcribed_count,
+                "total_images": images_to_transcribe + already_transcribed,
+            }
+            checkpoint_manager.save_checkpoint(documents, metadata)
 
         with ModelRegistry(config.models) as model_registry:
             try:
@@ -257,14 +296,18 @@ def transcribe(
                 transcriber = ImageTranscriber(
                     vision_client,
                     config.prompts.image_transcription,
+                    system_prompt=getattr(config.prompts, "image_transcription_system", ""),
                     batch_size=config.generation.vlm_batch_size,
                     max_concurrent=config.generation.vlm_concurrency,
                 )
 
-                # Batch transcribe all documents with progress callback
+                # Batch transcribe with checkpoint callback
                 asyncio.run(
                     transcriber.transcribe_batch_documents_async(
-                        all_documents, update_transcription_progress
+                        all_documents,
+                        progress_callback=update_transcription_progress,
+                        checkpoint_callback=save_checkpoint,
+                        checkpoint_interval=config.generation.vlm_batch_size,
                     )
                 )
 
@@ -276,11 +319,15 @@ def transcribe(
 
             except Exception as e:
                 console.print(f"[red]✗ Transcription failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
                 raise
 
-    # Save transcribed documents
+    # Save final transcribed documents
     with open(output_file, "wb") as f:
         pickle.dump(all_documents, f)
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
 
     # Save summary
     summary = {
@@ -345,21 +392,50 @@ def chunk(
     # Setup output
     output_dir = Path(config.dataset.parsed_dir).parent / "chunks"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check cache
     output_file = output_dir / "chunks.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "chunk")
+
+    # Check for existing final output
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Chunks already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-chunk[/yellow]")
         return
 
-    # Chunk documents with parallel processing
+    # Try to resume from checkpoint
+    processed_indices = set()
+    all_chunks = []
+
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            all_chunks, metadata = checkpoint_data
+            processed_indices = set(metadata.get("processed_indices", []))
+            console.print(
+                f"[cyan]Resuming from checkpoint: "
+                f"{len(processed_indices)} documents already chunked[/cyan]"
+            )
+
+    # Chunk documents with parallel processing and checkpoints
     chunker = ContentChunker(
         max_length=config.generation.max_context_length,
         overlap=config.generation.chunk_overlap,
     )
 
-    all_chunks = []
+    # Filter out already processed documents
+    remaining_documents = [
+        (i, doc) for i, doc in enumerate(all_documents) if i not in processed_indices
+    ]
+
+    if not remaining_documents:
+        console.print("[yellow]All documents already chunked![/yellow]")
+        # Save and return
+        with open(output_file, "wb") as f:
+            pickle.dump(all_chunks, f)
+        checkpoint_manager.clear_checkpoint()
+        return
 
     with Progress(
         SpinnerColumn(),
@@ -369,25 +445,46 @@ def chunk(
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Chunking documents...", total=len(all_documents))
+        total = len(all_documents)
+        task = progress.add_task("Chunking documents...", total=total)
+        progress.update(task, completed=len(processed_indices))
 
-        # Chunk documents in parallel
-        max_workers = min(8, len(all_documents))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all chunking tasks
-            future_to_doc = {
-                executor.submit(chunker.chunk_document, doc): doc for doc in all_documents
+        # Checkpoint callback
+        def save_checkpoint():
+            metadata = {
+                "processed_indices": list(processed_indices),
+                "total_documents": len(all_documents),
             }
+            checkpoint_manager.save_checkpoint(all_chunks, metadata)
 
-            # Collect results as they complete
-            for future in as_completed(future_to_doc):
-                chunks = future.result()
-                all_chunks.extend(chunks)
-                progress.update(task, advance=1)
+        # Process in batches for checkpoint saving
+        checkpoint_batch_size = config.generation.llm_batch_size
+        max_workers = min(8, len(remaining_documents))
 
-    # Save chunks
+        for batch_start in range(0, len(remaining_documents), checkpoint_batch_size):
+            batch = remaining_documents[batch_start : batch_start + checkpoint_batch_size]
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_doc = {
+                    executor.submit(chunker.chunk_document, doc): (idx, doc) for idx, doc in batch
+                }
+
+                for future in as_completed(future_to_doc):
+                    idx, _ = future_to_doc[future]
+                    chunks = future.result()
+                    all_chunks.extend(chunks)
+                    processed_indices.add(idx)
+                    progress.update(task, advance=1)
+
+            # Save checkpoint after each batch
+            save_checkpoint()
+
+    # Save final chunks
     with open(output_file, "wb") as f:
         pickle.dump(all_chunks, f)
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
 
     # Save summary
     summary = {
@@ -404,6 +501,46 @@ def chunk(
 
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Save chunk samples for debugging (first 10 chunks with details)
+    if all_chunks:
+        chunk_samples = []
+        sample_size = min(10, len(all_chunks))
+
+        for i in range(sample_size):
+            chunk = all_chunks[i]
+            chunk_samples.append(
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "source_path": str(chunk.source_path),
+                    "text_length": len(chunk.text),
+                    "text_preview": (
+                        chunk.text[:300] + "..." if len(chunk.text) > 300 else chunk.text
+                    ),
+                    "text_full": chunk.text,  # Full text for debugging
+                    "has_code": len(chunk.code_blocks) > 0,
+                    "num_code_blocks": len(chunk.code_blocks),
+                    "has_images": len(chunk.images) > 0,
+                    "num_images": len(chunk.images),
+                    "images": [
+                        {
+                            "path": img.path,
+                            "alt_text": img.alt_text,
+                            "has_transcription": bool(img.transcription),
+                            "resolved_path": img.resolved_path,
+                        }
+                        for img in chunk.images
+                    ],
+                    "previous_chunk_text_length": len(chunk.previous_chunk_text),
+                    "next_chunk_text_length": len(chunk.next_chunk_text),
+                    "all_document_code_count": len(chunk.all_document_code),
+                }
+            )
+
+        with open(output_dir / "chunk_samples.json", "w") as f:
+            json.dump({"sample_count": sample_size, "samples": chunk_samples}, f, indent=2)
+
+        console.print(f"[cyan]Saved {sample_size} chunk samples for debugging[/cyan]")
 
     # Display results
     table = Table(title="Chunking Complete")
@@ -467,12 +604,43 @@ def filter_quality(
     # Setup output
     output_dir = Path(config.dataset.parsed_dir).parent / "filtered"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check cache
     output_file = output_dir / "chunks.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "filter")
+
+    # Check for existing final output
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Filtered chunks already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-filter[/yellow]")
+        return
+
+    # Try to resume from checkpoint
+    filter_results = []
+    debug_info = []
+    processed_count = 0
+
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            checkpoint_state, _ = checkpoint_data
+            filter_results = checkpoint_state.get("results", [])
+            debug_info = checkpoint_state.get("debug_info", [])
+            processed_count = len(filter_results)
+            console.print(
+                f"[cyan]Resuming from checkpoint: {processed_count} chunks already filtered[/cyan]"
+            )
+
+    # Filter remaining chunks
+    remaining_chunks = all_chunks[processed_count:]
+
+    if not remaining_chunks:
+        console.print("[yellow]All chunks already filtered![/yellow]")
+        filtered_chunks = [chunk for chunk, passed in filter_results if passed]
+        with open(output_file, "wb") as f:
+            pickle.dump(filtered_chunks, f)
+        checkpoint_manager.clear_checkpoint()
         return
 
     # Filter chunks using batch processing
@@ -485,60 +653,81 @@ def filter_quality(
         console=console,
     ) as progress:
         task = progress.add_task("Filtering chunks...", total=len(all_chunks))
+        progress.update(task, completed=processed_count)
 
-        # Progress callback
         def update_filter_progress(completed):
-            progress.update(task, completed=completed)
+            progress.update(task, completed=processed_count + completed)
+
+        def save_checkpoint(partial_results, partial_debug):
+            checkpoint_state = {
+                "results": filter_results + partial_results,
+                "debug_info": debug_info + partial_debug,
+            }
+            metadata = {
+                "processed_count": len(checkpoint_state["results"]),
+                "total_chunks": len(all_chunks),
+            }
+            checkpoint_manager.save_checkpoint(checkpoint_state, metadata)
 
         with ModelRegistry(config.models) as model_registry:
             filter_model_name = config.generation.filter_model or config.generation.curate_model
             filter_client = model_registry.get_llm_client(filter_model_name)
             quality_filter = QualityFilter(filter_client)
 
-            total_images_before = sum(len(chunk.images) for chunk in all_chunks)
-
             console.print(
                 f"[cyan]Batch size={config.generation.llm_batch_size}, "
                 f"concurrency={config.generation.llm_concurrency}[/cyan]"
             )
 
-            filter_results, debug_info = asyncio.run(
-                quality_filter.filter_chunks_batch_async(
-                    all_chunks,
-                    config.prompts.content_quality_check,
-                    config.prompts.image_quality_check,
-                    config.prompts.content_filter_system,
-                    config.prompts.image_filter_system,
-                    batch_size=config.generation.llm_batch_size,
-                    max_concurrent=config.generation.llm_concurrency,
-                    progress_callback=update_filter_progress,
-                    save_debug=True,
-                )
-            )
-
-            filtered_chunks = [chunk for chunk, passed in filter_results if passed]
-
-            # Save debug information
-            if debug_info:
-                debug_file = output_dir / "filter_debug.jsonl"
-                with open(debug_file, "w") as f:
-                    for entry in debug_info:
-                        json.dump(entry, f, ensure_ascii=False)
-                        f.write("\n")
-
-                # Count rejections
-                rejected_count = sum(1 for entry in debug_info if entry["decision"] == "REJECT")
-                console.print(f"\n[cyan]ℹ Filter debug info saved: {debug_file}[/cyan]")
-                console.print(
-                    f"[cyan]  Total filtered: {len(debug_info)} items, "
-                    f"{rejected_count} rejected[/cyan]"
+            try:
+                new_results, new_debug = asyncio.run(
+                    quality_filter.filter_chunks_batch_async(
+                        remaining_chunks,
+                        config.prompts.content_quality_check,
+                        config.prompts.image_quality_check,
+                        config.prompts.content_filter_system,
+                        config.prompts.image_filter_system,
+                        batch_size=config.generation.llm_batch_size,
+                        max_concurrent=config.generation.llm_concurrency,
+                        progress_callback=update_filter_progress,
+                        checkpoint_callback=save_checkpoint,
+                        save_debug=True,
+                    )
                 )
 
+                filter_results.extend(new_results)
+                debug_info.extend(new_debug)
+
+            except Exception as e:
+                console.print(f"[red]✗ Filtering failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
+                raise
+
+    filtered_chunks = [chunk for chunk, passed in filter_results if passed]
+    total_images_before = sum(len(chunk.images) for chunk, _ in filter_results)
     total_images_after = sum(len(chunk.images) for chunk in filtered_chunks)
 
+    # Save filtered chunks
     with open(output_file, "wb") as f:
         pickle.dump(filtered_chunks, f)
 
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
+
+    if debug_info:
+        debug_file = output_dir / "filter_debug.jsonl"
+        with open(debug_file, "w") as f:
+            for entry in debug_info:
+                json.dump(entry, f, ensure_ascii=False)
+                f.write("\n")
+
+        rejected_count = sum(1 for entry in debug_info if entry["decision"] == "REJECT")
+        console.print(f"\n[cyan]ℹ Filter debug info saved: {debug_file}[/cyan]")
+        console.print(
+            f"[cyan]  Total filtered: {len(debug_info)} items, {rejected_count} rejected[/cyan]"
+        )
+
+    # Save summary
     summary = {
         "chunks_before": len(all_chunks),
         "chunks_after": len(filtered_chunks),
@@ -603,13 +792,34 @@ def classify(
     # Setup output
     output_dir = Path(config.dataset.parsed_dir).parent / "classified"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check cache
     output_file = output_dir / "chunks_by_category.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "classify")
+
+    # Check for existing final output
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Classifications already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-classify[/yellow]")
         return
+
+    # Try to resume from checkpoint
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            chunks_by_category, _ = checkpoint_data
+            classified_count = sum(len(chunks) for chunks in chunks_by_category.values())
+            console.print(
+                f"[cyan]Resuming from checkpoint: {classified_count} chunks already classified[/cyan]"
+            )
+            # Save final and return if complete
+            if classified_count >= len(all_chunks):
+                with open(output_file, "wb") as f:
+                    pickle.dump(chunks_by_category, f)
+                checkpoint_manager.clear_checkpoint()
+                console.print("[green]✓ Classification already complete[/green]")
+                return
 
     # Classify chunks using batch processing
     with Progress(
@@ -626,6 +836,15 @@ def classify(
         def update_classify_progress(completed):
             progress.update(task, completed=completed)
 
+        # Checkpoint callback
+        def save_checkpoint(organized_dict):
+            classified_count = sum(len(chunks) for chunks in organized_dict.values())
+            metadata = {
+                "classified_count": classified_count,
+                "total_chunks": len(all_chunks),
+            }
+            checkpoint_manager.save_checkpoint(organized_dict, metadata)
+
         with ModelRegistry(config.models) as model_registry:
             # Use dedicated classify model if specified, otherwise fall back to curate model
             classify_model_name = config.generation.classify_model or config.generation.curate_model
@@ -637,19 +856,29 @@ def classify(
                 f"concurrency={config.generation.llm_concurrency}[/cyan]"
             )
 
-            # organize_by_category now uses batch processing internally
-            chunks_by_category = category_manager.organize_by_category(
-                all_chunks,
-                config.prompts.category_classification,
-                config.prompts.category_classification_system,
-                batch_size=config.generation.llm_batch_size,
-                max_concurrent=config.generation.llm_concurrency,
-                progress_callback=update_classify_progress,
-            )
+            try:
+                # organize_by_category now uses batch processing with checkpoints
+                chunks_by_category = category_manager.organize_by_category(
+                    all_chunks,
+                    config.prompts.category_classification,
+                    config.prompts.category_classification_system,
+                    batch_size=config.generation.llm_batch_size,
+                    max_concurrent=config.generation.llm_concurrency,
+                    progress_callback=update_classify_progress,
+                    checkpoint_callback=save_checkpoint,
+                )
+
+            except Exception as e:
+                console.print(f"[red]✗ Classification failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
+                raise
 
     # Save classified chunks
     with open(output_file, "wb") as f:
         pickle.dump(chunks_by_category, f)
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
 
     # Save summary
     summary = {
@@ -716,13 +945,46 @@ def generate(
     # Setup output
     output_dir = Path(config.dataset.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check cache
     output_file = output_dir / "samples.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "generate")
+
+    # Check for existing final output
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Samples already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-generate[/yellow]")
         return
+
+    # Try to resume from checkpoint
+    samples = []
+    rejected_samples_list = []
+    code_failures_list = []
+
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            checkpoint_state, _ = checkpoint_data
+            samples = checkpoint_state.get("samples", [])
+            rejected_samples_list = checkpoint_state.get("rejected_samples", [])
+            code_failures_list = checkpoint_state.get("code_failures", [])
+
+            if samples:
+                console.print(
+                    f"[cyan]Resuming from checkpoint: {len(samples)} samples already generated[/cyan]"
+                )
+
+            # Check if we've reached target
+            if len(samples) >= config.generation.target_samples:
+                console.print("[yellow]Target samples already generated![/yellow]")
+                samples = samples[: config.generation.target_samples]
+                # Save final output and return
+                with open(output_file, "wb") as f:
+                    pickle.dump(samples, f)
+                checkpoint_manager.clear_checkpoint()
+                console.print(f"[green]✓ {len(samples)} samples ready[/green]")
+                return
 
     # Generate samples
     console.print(f"[cyan]Target: {config.generation.target_samples} samples[/cyan]")
@@ -738,10 +1000,6 @@ def generate(
         pipeline_steps += " → Quality Validation"
     console.print(f"[cyan]Generation pipeline: {pipeline_steps}[/cyan]\n")
 
-    # Storage for rejected samples and code failures
-    rejected_samples_list = []
-    code_failures_list = []
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -753,6 +1011,7 @@ def generate(
         # Create tasks for each substep (will update totals dynamically)
         questions_task = progress.add_task("Generating questions...", total=None)
         answers_task = progress.add_task("Generating answers...", total=None)
+        verification_task = progress.add_task("Verifying code...", total=None)
         curation_task = progress.add_task("Validating quality...", total=None)
 
         # Progress callbacks to update progress bars
@@ -768,6 +1027,12 @@ def generate(
         def update_answer_progress(completed):
             progress.update(answers_task, completed=completed)
 
+        def set_verification_total(total):
+            progress.update(verification_task, total=total)
+
+        def update_verification_progress(completed):
+            progress.update(verification_task, completed=completed)
+
         def set_curation_total(total):
             progress.update(curation_task, total=total)
 
@@ -780,15 +1045,23 @@ def generate(
         def save_code_failures(failures_batch):
             code_failures_list.extend(failures_batch)
 
+        # Checkpoint callback (no longer needed in commands.py as pipeline handles it)
+        def save_checkpoint():
+            pass  # Handled internally by pipeline
+
         progress_callbacks = {
             "set_questions_total": set_questions_total,
             "questions": update_question_progress,
             "set_answers_total": set_answers_total,
             "answers": update_answer_progress,
+            "set_verification_total": set_verification_total,
+            "verification": update_verification_progress,
             "set_curation_total": set_curation_total,
             "curation": update_curation_progress,
             "save_rejected": save_rejected,
             "save_code_failures": save_code_failures,
+            "save_checkpoint": save_checkpoint,
+            "no_cache": no_cache,
         }
 
         with ModelRegistry(config.models) as model_registry:
@@ -797,14 +1070,29 @@ def generate(
                 config.categories, model_registry.get_llm_client(classify_model_name)
             )
 
-            pipeline = GenerationPipeline(config, model_registry, category_manager)
-            samples = pipeline.generate_samples(chunks_by_category, progress_callbacks)
+            pipeline = GenerationPipeline(
+                config, model_registry, category_manager, checkpoint_manager
+            )
+
+            try:
+                samples = pipeline.generate_samples(chunks_by_category, progress_callbacks)
+            except Exception as e:
+                console.print(f"\n[red]✗ Generation failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
+                raise
 
     console.print()  # New line after progress bars
+
+    # Trim to target if exceeded
+    if len(samples) > config.generation.target_samples:
+        samples = samples[: config.generation.target_samples]
 
     # Save samples
     with open(output_file, "wb") as f:
         pickle.dump(samples, f)
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
 
     # Save JSONL for inspection
     with open(output_dir / "samples.jsonl", "w") as f:
@@ -815,10 +1103,13 @@ def generate(
                     "answer": sample.answer,
                     "category": sample.category,
                     "question_type": sample.question_type,
+                    "test_code": sample.test_code,
+                    "entry_point": sample.entry_point,
                     "image_path": sample.image_path,
                     "source_path": sample.source_path,
                 },
                 f,
+                ensure_ascii=False,
             )
             f.write("\n")
 
@@ -847,12 +1138,14 @@ def generate(
         )
 
     # Save summary
+    samples_with_tests = sum(1 for s in samples if s.test_code)
     summary = {
         "total_samples": len(samples),
         "rejected_samples": len(rejected_samples_list),
         "code_verification_failures": len(code_failures_list),
         "multimodal_samples": sum(1 for s in samples if s.image_path),
         "text_only_samples": sum(1 for s in samples if not s.image_path),
+        "samples_with_tests": samples_with_tests,
         "by_type": {},
         "by_category": {},
         "curation_enabled": config.generation.enable_curate_filtering,
@@ -873,6 +1166,7 @@ def generate(
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green", justify="right")
     table.add_row("Total Samples", str(len(samples)))
+    table.add_row("With Unit Tests", str(summary["samples_with_tests"]))
     if config.generation.enable_curate_filtering:
         table.add_row("Rejected Samples", str(summary["rejected_samples"]))
     if config.generation.enable_code_verification:

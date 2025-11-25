@@ -121,7 +121,7 @@ class QualityFilter:
         ]
 
         try:
-            response = self.llm_client.generate(messages, max_tokens=500, temperature=0.1)
+            response = self.llm_client.generate(messages, max_tokens=1024, temperature=0.1)
             return response.strip().lower().startswith("yes")
         except Exception as e:
             print(f"Quality check failed: {e}")
@@ -175,7 +175,7 @@ class QualityFilter:
         ]
 
         try:
-            response = self.llm_client.generate(messages, max_tokens=500, temperature=0.1)
+            response = self.llm_client.generate(messages, max_tokens=1024, temperature=0.1)
             return response.strip().lower().startswith("yes")
         except Exception as e:
             print(f"Image quality check failed: {e}")
@@ -191,10 +191,11 @@ class QualityFilter:
         batch_size: int = 10,
         max_concurrent: int = 20,
         progress_callback=None,
+        checkpoint_callback=None,
         save_debug: bool = True,
     ) -> Tuple[List[Tuple[Chunk, bool]], List[dict]]:
         """
-        Filter chunks in batch using async processing.
+        Filter chunks in batch using async processing with checkpoint support.
 
         Args:
             chunks: List of chunks to filter
@@ -205,20 +206,21 @@ class QualityFilter:
             batch_size: Batch size for processing
             max_concurrent: Max concurrent requests
             progress_callback: Optional callback function(completed_count) for progress tracking
+            checkpoint_callback: Optional callback function(results, debug_info) for checkpoint saving
             save_debug: Whether to save debug information
 
         Returns:
             Tuple of (List of (chunk, passed_filter) tuples, debug_info list)
         """
         debug_info = []
-        # System prompt for content filtering
+        results = []
+
         content_system_content = (
             content_system_prompt
             if content_system_prompt
             else "You are a content quality evaluator. Respond with only 'yes' or 'no'."
         )
 
-        # Prepare all content quality check messages
         content_messages = []
         for chunk in chunks:
             if len(chunk.text) < 50:
@@ -276,7 +278,7 @@ class QualityFilter:
                                         "source": str(chunks[chunk_idx].source_path),
                                         "decision": "PASS" if passed else "REJECT",
                                         "reason": reason,
-                                        "content_preview": chunks[chunk_idx].text,
+                                        "content_preview": chunks[chunk_idx].text[:200],
                                         "full_response": response,
                                     }
                                 )
@@ -288,79 +290,121 @@ class QualityFilter:
             else:
                 content_results.extend([False] * len(batch))
 
-        results = []
-        for i, (chunk, content_passed) in enumerate(zip(chunks, content_results)):
+        unique_images = {}  # image_path -> (ImageReference, chunk_text)
+        for chunk_idx, chunk in enumerate(chunks):
+            if content_results[chunk_idx] and chunk.is_multimodal and chunk.images:
+                for img in chunk.images:
+                    if img.transcription and img.resolved_path:
+                        if img.resolved_path not in unique_images:
+
+                            context_preview = (
+                                chunk.text[:500] if len(chunk.text) > 500 else chunk.text
+                            )
+                            unique_images[img.resolved_path] = (img, context_preview, chunk_idx)
+
+        # Batch check all unique images
+        image_results = {}  # image_path -> (passed, reason)
+        if unique_images:
+            image_system_content = (
+                image_system_prompt
+                if image_system_prompt
+                else "You are an image quality evaluator. Respond with only 'yes' or 'no'."
+            )
+
+            image_messages = []
+            image_paths = []
+
+            for img_path, (img, chunk_context, chunk_idx) in unique_images.items():
+                context_parts = []
+                if img.alt_text:
+                    context_parts.append(f"Alt text: {img.alt_text}")
+                if img.caption:
+                    context_parts.append(f"Caption: {img.caption}")
+                if img.context:
+                    context_parts.append(f"Image context: {img.context}")
+                
+                context_parts.append(f"Surrounding text: {chunk_context}")
+
+                context = "\n".join(context_parts) if context_parts else "No additional context"
+
+                user_prompt = image_prompt.format(
+                    transcription=img.transcription,
+                    context=context,
+                )
+
+                messages = [
+                    Message(role="system", content=image_system_content),
+                    Message(role="user", content=user_prompt),
+                ]
+                image_messages.append(messages)
+                image_paths.append((img_path, img, chunk_idx))
+
+            # Batch process image quality checks
+            try:
+                image_responses = await self.llm_client.generate_batch_async(
+                    image_messages,
+                    max_tokens=1024,
+                    temperature=0.1,
+                    max_concurrent=max_concurrent,
+                )
+
+                for idx, (img_path, img, chunk_idx) in enumerate(image_paths):
+                    response = image_responses[idx]
+                    passed, reason = self._parse_filter_response(response)
+                    image_results[img_path] = (passed, reason)
+
+                    if save_debug:
+                        debug_info.append(
+                            {
+                                "type": "image",
+                                "chunk_id": chunks[chunk_idx].chunk_id,
+                                "source": str(chunks[chunk_idx].source_path),
+                                "image_path": img_path,
+                                "decision": "PASS" if passed else "REJECT",
+                                "reason": reason,
+                                "transcription_preview": img.transcription[:200],
+                                "full_response": response,
+                            }
+                        )
+            except Exception as e:
+                print(f"Batch image quality check failed: {e}")
+                for img_path in unique_images.keys():
+                    image_results[img_path] = (True, "Error during filtering")
+
+        # Build final results with filtered images
+        for chunk_idx, chunk in enumerate(chunks):
+            content_passed = content_results[chunk_idx]
+
             if not content_passed:
                 results.append((chunk, False))
             elif chunk.is_multimodal and chunk.images:
-                # Filter images
+                # Filter images based on batch results
                 filtered_chunk = Chunk(
                     chunk_id=chunk.chunk_id,
                     text=chunk.text,
                     code_blocks=chunk.code_blocks,
-                    images=[],  # Will add filtered images
+                    images=[],
                     source_path=chunk.source_path,
                     metadata=chunk.metadata,
+                    previous_chunk_text=chunk.previous_chunk_text,
+                    next_chunk_text=chunk.next_chunk_text,
+                    all_document_code=chunk.all_document_code,
                 )
 
                 for img in chunk.images:
                     if img.transcription and img.resolved_path:
-                        # Get image quality decision with reason
-                        context_parts = []
-                        if img.alt_text:
-                            context_parts.append(f"Alt text: {img.alt_text}")
-                        if img.caption:
-                            context_parts.append(f"Caption: {img.caption}")
-                        context = (
-                            "\n".join(context_parts) if context_parts else "No additional context"
-                        )
-
-                        user_prompt = image_prompt.format(
-                            transcription=img.transcription,
-                            context=context,
-                        )
-
-                        system_content = (
-                            image_system_prompt
-                            if image_system_prompt
-                            else "You are an image quality evaluator. Respond with only 'yes' or 'no'."
-                        )
-
-                        messages = [
-                            Message(role="system", content=system_content),
-                            Message(role="user", content=user_prompt),
-                        ]
-
-                        try:
-                            response = self.llm_client.generate(
-                                messages, max_tokens=1024, temperature=0.1
-                            )
-                            passed, reason = self._parse_filter_response(response)
-
-                            # Save debug info for images
-                            if save_debug:
-                                debug_info.append(
-                                    {
-                                        "type": "image",
-                                        "chunk_id": chunk.chunk_id,
-                                        "source": str(chunk.source_path),
-                                        "image_path": img.resolved_path,
-                                        "decision": "PASS" if passed else "REJECT",
-                                        "reason": reason,
-                                        "transcription_preview": img.transcription,
-                                        "full_response": response,
-                                    }
-                                )
-
-                            if passed:
-                                filtered_chunk.images.append(img)
-                        except Exception as e:
-                            print(f"Image quality check failed: {e}")
-                            # On error, keep the image
+                        passed, _ = image_results.get(img.resolved_path, (True, "Not filtered"))
+                        if passed:
                             filtered_chunk.images.append(img)
+                    else:
+                        # Keep images without transcription/resolution
+                        filtered_chunk.images.append(img)
 
                 results.append((filtered_chunk, True))
             else:
                 results.append((chunk, True))
+
+            if (chunk_idx + 1) % batch_size == 0 and checkpoint_callback:
+                checkpoint_callback(results, debug_info)
 
         return results, debug_info

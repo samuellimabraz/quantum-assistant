@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 
-from synthetic_data.models import Message, VLMClient
+from synthetic_data.models import VLMClient
 from synthetic_data.parsers.base import Document, ImageReference
 
 
@@ -14,6 +14,7 @@ class ImageTranscriber:
         self,
         vlm_client: VLMClient,
         transcription_prompt: str,
+        system_prompt: str = "",
         batch_size: int = 16,
         max_concurrent: int = 16,
     ):
@@ -23,11 +24,13 @@ class ImageTranscriber:
         Args:
             vlm_client: Vision-language model client
             transcription_prompt: Prompt template for image transcription
+            system_prompt: System prompt for transcription
             batch_size: Number of images to process in parallel batches
             max_concurrent: Maximum concurrent VLM requests
         """
         self.vlm_client = vlm_client
         self.transcription_prompt = transcription_prompt
+        self.system_prompt = system_prompt
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
 
@@ -83,6 +86,7 @@ class ImageTranscriber:
         try:
             transcriptions = await self.vlm_client.generate_batch_with_images_async(
                 batch_prompts,
+                system_prompt=self.system_prompt,
                 max_concurrent=self.max_concurrent,
                 progress_callback=progress_callback,
             )
@@ -104,20 +108,28 @@ class ImageTranscriber:
         asyncio.run(self.transcribe_batch_documents_async(documents))
 
     async def transcribe_batch_documents_async(
-        self, documents: list[Document], progress_callback=None
+        self,
+        documents: list[Document],
+        progress_callback=None,
+        checkpoint_callback=None,
+        checkpoint_interval: int = 50,
     ) -> None:
         """
-        Transcribe images across multiple documents using async batching.
+        Transcribe images across multiple documents using async batching with checkpoints.
 
         Args:
             documents: List of documents with images to transcribe
             progress_callback: Optional callback function(completed_count) for progress tracking
+            checkpoint_callback: Optional callback function(documents) for checkpoint saving
+            checkpoint_interval: Save checkpoint every N images
         """
         # Collect all images from all documents
         all_prompts_and_images = []
 
         for doc in documents:
-            images_to_transcribe = [img for img in doc.images if img.resolved_path]
+            images_to_transcribe = [
+                img for img in doc.images if img.resolved_path and not img.transcription
+            ]
             for img_ref in images_to_transcribe:
                 try:
                     prompt = self._prepare_prompt(img_ref)
@@ -131,22 +143,41 @@ class ImageTranscriber:
         if not all_prompts_and_images:
             return
 
-        # Transcribe all images in one batch
-        batch_prompts = [(prompt, img_path) for _, prompt, img_path in all_prompts_and_images]
+        # Process in batches with checkpoints between batches
+        completed_count = 0
 
         try:
-            transcriptions = await self.vlm_client.generate_batch_with_images_async(
-                batch_prompts,
-                max_concurrent=self.max_concurrent,
-                progress_callback=progress_callback,
-            )
+            for i in range(0, len(all_prompts_and_images), checkpoint_interval):
+                batch_items = all_prompts_and_images[i : i + checkpoint_interval]
+                batch_prompts = [(prompt, img_path) for _, prompt, img_path in batch_items]
 
-            # Assign transcriptions back to image references
-            for i, transcription in enumerate(transcriptions):
-                img_ref = all_prompts_and_images[i][0]
-                img_ref.transcription = transcription.strip()
+                # Transcribe this batch
+                transcriptions = await self.vlm_client.generate_batch_with_images_async(
+                    batch_prompts,
+                    system_prompt=self.system_prompt,
+                    max_concurrent=self.max_concurrent,
+                    progress_callback=None,  # Handle progress manually
+                )
+
+                # Assign transcriptions immediately
+                for j, transcription in enumerate(transcriptions):
+                    img_ref = batch_items[j][0]
+                    img_ref.transcription = transcription.strip()
+                    completed_count += 1
+
+                    # Update progress after each image
+                    if progress_callback:
+                        progress_callback(completed_count)
+
+                # Save checkpoint after batch is complete and transcriptions are assigned
+                if checkpoint_callback:
+                    checkpoint_callback(documents)
+
         except Exception as e:
             print(f"Warning: Batch transcription failed: {e}")
+            # Save checkpoint on error with whatever we've completed
+            if checkpoint_callback:
+                checkpoint_callback(documents)
 
     def _prepare_prompt(self, img_ref: ImageReference) -> str:
         """Prepare transcription prompt with context."""
@@ -176,7 +207,9 @@ class ImageTranscriber:
         prompt = self._prepare_prompt(img_ref)
 
         try:
-            response = self.vlm_client.generate_with_image(prompt, image_path)
+            response = self.vlm_client.generate_with_image(
+                prompt, image_path, system_prompt=self.system_prompt
+            )
             return response.strip()
         except Exception as e:
             raise RuntimeError(f"VLM transcription failed: {e}")

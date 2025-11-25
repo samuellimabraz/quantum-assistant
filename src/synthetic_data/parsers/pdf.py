@@ -28,8 +28,21 @@ class PDFParser(DocumentParser):
 
                 # Extract text
                 text = page.get_text()
-                if text.strip():
-                    content_parts.append(text.strip())
+                page_content = [text.strip()] if text.strip() else []
+
+                # Check for images on this page
+                image_list = page.get_images(full=True)
+                for img_index, _ in enumerate(image_list):
+                    # Create reference that matches what _create_image_references produces
+                    img_ref_path = f"pdf:{path.name}:page{page_num}:img{img_index}"
+                    # Append image reference to page content so chunker finds it
+                    # Using a standard markdown image format that chunker recognizes
+                    page_content.append(
+                        f"\n![Figure {page_num + 1}.{img_index + 1}]({img_ref_path})\n"
+                    )
+
+                if page_content:
+                    content_parts.append("\n".join(page_content))
 
             content = "\n\n".join(content_parts)
 

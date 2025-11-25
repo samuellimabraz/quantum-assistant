@@ -146,9 +146,10 @@ class CategoryManager:
         batch_size: int = 32,
         max_concurrent: int = 10,
         progress_callback=None,
+        checkpoint_callback=None,
     ) -> list[str]:
         """
-        Classify multiple chunks in batch using async processing.
+        Classify multiple chunks in batch using async processing with checkpoint support.
 
         Args:
             chunks: List of content chunks to classify
@@ -157,6 +158,7 @@ class CategoryManager:
             batch_size: Size of batches for processing
             max_concurrent: Maximum concurrent LLM requests
             progress_callback: Optional callback function(completed_count) for progress tracking
+            checkpoint_callback: Optional callback function(categories) for checkpoint saving
 
         Returns:
             List of category names corresponding to each chunk
@@ -173,34 +175,52 @@ class CategoryManager:
         else:
             system_content = "You are a content classifier. Return only the category name."
 
-        # Prepare all classification prompts
-        all_messages = []
-        for chunk in chunks:
-            user_prompt = prompt_template.format(content=chunk.text[:1500])
-
-            messages = [
-                Message(role="system", content=system_content),
-                Message(role="user", content=user_prompt),
-            ]
-            all_messages.append(messages)
-
-        # Classify in batch
-        responses = await self.llm_client.generate_batch_async(
-            all_messages,
-            max_concurrent=max_concurrent,
-            temperature=0.1,
-            max_tokens=500,
-            progress_callback=progress_callback,
-        )
-
-        # Parse and validate responses
         categories = []
-        for i, response in enumerate(responses):
-            category = response.strip().lower().replace("-", "_").replace(" ", "_")
-            if category in self.categories:
-                categories.append(category)
-            else:
-                categories.append(self._keyword_classify(chunks[i]))
+
+        # Process in batches for checkpointing
+        for i in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[i : i + batch_size]
+
+            # Prepare batch classification prompts
+            batch_messages = []
+            for chunk in batch_chunks:
+                user_prompt = prompt_template.format(content=chunk.text[:1500])
+
+                messages = [
+                    Message(role="system", content=system_content),
+                    Message(role="user", content=user_prompt),
+                ]
+                batch_messages.append(messages)
+
+            # Classify batch
+            batch_progress = None
+            if progress_callback:
+                batch_start = i
+
+                def batch_progress_callback(completed):
+                    progress_callback(batch_start + completed)
+
+                batch_progress = batch_progress_callback
+
+            responses = await self.llm_client.generate_batch_async(
+                batch_messages,
+                max_concurrent=max_concurrent,
+                temperature=0.1,
+                max_tokens=500,
+                progress_callback=batch_progress,
+            )
+
+            # Parse and validate batch responses
+            for j, response in enumerate(responses):
+                category = response.strip().lower().replace("-", "_").replace(" ", "_")
+                if category in self.categories:
+                    categories.append(category)
+                else:
+                    categories.append(self._keyword_classify(batch_chunks[j]))
+
+            # Save checkpoint after batch
+            if checkpoint_callback:
+                checkpoint_callback(categories)
 
         return categories
 
@@ -212,6 +232,7 @@ class CategoryManager:
         batch_size: int = 32,
         max_concurrent: int = 10,
         progress_callback=None,
+        checkpoint_callback=None,
     ) -> dict[str, list[Chunk]]:
         """
         Organize chunks by category using batch classification.
@@ -223,6 +244,7 @@ class CategoryManager:
             batch_size: Size of batches for processing
             max_concurrent: Maximum concurrent LLM requests
             progress_callback: Optional callback function(completed_count) for progress tracking
+            checkpoint_callback: Optional callback function(organized_dict) for checkpoint saving
 
         Returns:
             Dict mapping category names to lists of chunks
@@ -230,6 +252,15 @@ class CategoryManager:
         organized = {name: [] for name in self.categories}
 
         if self.llm_client and prompt_template:
+            # Wrap checkpoint callback to save organized structure
+            def save_categories_checkpoint(categories):
+                # Rebuild organized dict from categories so far
+                temp_organized = {name: [] for name in self.categories}
+                for chunk, category in zip(chunks[: len(categories)], categories):
+                    temp_organized[category].append(chunk)
+                if checkpoint_callback:
+                    checkpoint_callback(temp_organized)
+
             categories = asyncio.run(
                 self._classify_and_cleanup_async(
                     chunks,
@@ -238,6 +269,7 @@ class CategoryManager:
                     batch_size,
                     max_concurrent,
                     progress_callback,
+                    save_categories_checkpoint,
                 )
             )
             for chunk, category in zip(chunks, categories):
@@ -257,10 +289,17 @@ class CategoryManager:
         batch_size: int,
         max_concurrent: int,
         progress_callback=None,
+        checkpoint_callback=None,
     ) -> list[str]:
         """Classify chunks and cleanup async client."""
         categories = await self.classify_chunks_batch_async(
-            chunks, prompt_template, system_prompt, batch_size, max_concurrent, progress_callback
+            chunks,
+            prompt_template,
+            system_prompt,
+            batch_size,
+            max_concurrent,
+            progress_callback,
+            checkpoint_callback,
         )
         if self.llm_client:
             await self.llm_client.aclose()
