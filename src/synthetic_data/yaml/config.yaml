@@ -1,5 +1,3 @@
-# Main configuration for quantum assistant dataset generation
-
 sources:
   - path: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/data
     type: directory
@@ -12,64 +10,50 @@ sources:
     exclude_patterns:
       - "**/node_modules/**"
       - "**/.git/**"
-    max_files: 20
+    max_files: 40
 
 categories:
   - name: quantum_fundamentals
     description: Superposition, measurement, Born's rule, uncertainty, wave-particle duality, Bloch sphere, quantum postulates, Dirac notation
-    weight: 3200
 
   - name: quantum_states_entanglement
     description: Bell states, EPR, entanglement measures, cluster states, teleportation, nonlocality, quantum correlations
-    weight: 2800
 
   - name: quantum_gates_circuits
     description: Pauli gates, Hadamard, CNOT, controlled gates, rotations, multi-control, QASM, circuit depth, transpilation
-    weight: 3300
 
   - name: quantum_algorithms
     description: QFT, Grover, Shor, phase estimation, Simon, amplitude estimation, VQE, QAOA, algorithm complexity
-    weight: 3400
 
   - name: quantum_ml_optimization
     description: Quantum kernels, QNNs, quantum classifiers, GAN, hybrid pipelines, parameterized circuits, data encoding
-    weight: 2300
 
   - name: quantum_simulation_hamiltonians
     description: Trotter-Suzuki, qDRIFT, Hamiltonian simulation, Heisenberg Ising models, Jordan-Wigner, time evolution
-    weight: 2500
 
   - name: quantum_error_correction_noise
     description: Error correction codes, stabilizers, surface codes, Lindblad, decoherence, noise mitigation, benchmarking
-    weight: 2200
 
   - name: quantum_information_communication
     description: Quantum cryptography, BB84, E91, superdense coding, channel capacity, quantum networks, secret sharing
-    weight: 2000
 
   - name: variational_hybrid_approaches
     description: VQE, QAOA, SSVQE, VQSD, loss landscapes, optimizer choices, initialization strategies
-    weight: 2500
 
   - name: quantum_thermodynamics
     description: Gibbs states, entropy, thermalization, adiabatic theorem, work extraction, open quantum systems
-    weight: 1400
 
   - name: advanced_topological
     description: Topological qubits, anyons, Kitaev models, Yang-Baxter, topological states, braiding
-    weight: 1000
 
   - name: frameworks_tooling
     description: Qiskit, PennyLane, OpenQASM, QuTiP, SDK differences, backend selection, transpiler, QASM generation
-    weight: 3200
 
   - name: hardware_backends
     description: NISQ constraints, qubit connectivity, readout errors, calibration, noise models, simulators, resource estimation
-    weight: 2000
 
   - name: education_meta
     description: Benchmarks, tutorials, best practices, reproducibility, educational exercises, introductory content
-    weight: 1500
 
 models:
   endpoints:
@@ -77,235 +61,368 @@ models:
       base_url: ${VISION_MODEL_BASE_URL}
       api_key: ${VISION_MODEL_API_KEY}
       model_name: ${VISION_MODEL_NAME}
-      max_tokens: 4096
+      max_tokens: 8192
       temperature: 0.2
 
     - name: question-model
       base_url: ${QUESTION_MODEL_BASE_URL}
       api_key: ${QUESTION_MODEL_API_KEY}
       model_name: ${QUESTION_MODEL_NAME}
-      max_tokens: 4096
-      temperature: 0.1
+      max_tokens: 16384
+      temperature: 0.5
 
     - name: answer-model
       base_url: ${ANSWER_MODEL_BASE_URL}
       api_key: ${ANSWER_MODEL_API_KEY}
       model_name: ${ANSWER_MODEL_NAME}
-      max_tokens: 4096
-      temperature: 0.1
+      max_tokens: 16384
+      temperature: 0.3
+      service_tier: "auto"
 
     - name: curate-model
       base_url: ${CURATE_MODEL_BASE_URL}
       api_key: ${CURATE_MODEL_API_KEY}
       model_name: ${CURATE_MODEL_NAME}
-      max_tokens: 512
-      temperature: 0.1
+      max_tokens: 4096
+      temperature: 0.2
 
 prompts:
-  question_generation: |
-    Reasoning: medium
-    Based on this content, generate a natural self-contained question that a user, student, or developer would ask about quantum computing or Qiskit in a objective and clear way.
+  # === SYSTEM PROMPTS ===
 
-    Content:
+  question_generation_system: |
+    Reasoning: high.
+    You are an expert at creating high-quality training data for quantum computing AI models.
+    Generate concise, direct questions/tasks based ONLY on the provided context.
+
+    Critical requirements:
+    - Questions must be self-contained with all necessary information
+    - DO NOT reference "the provided code", "the context", "the image above"
+    - DO NOT use polite phrases ("Please", "Could you", "Would you")
+    - DO NOT use formatting markers ("**Task**", "*Hint:*")
+    - Be direct and objective without unnecessary embellishment
+    - Focus on what can be verified and tested
+    - Base questions on actual content, not model knowledge
+
+  answer_generation_system: |
+    Reasoning: high.
+    You are a Qiskit quantum computing expert providing reference solutions.
+    Generate correct, executable code that passes the unit test.
+
+    Code requirements:
+    - Include ALL necessary imports at the beginning
+    - Code must be complete, concise, and executable
+    - NO comments in code
+    - NO emojis or conversational text
+    - Use only Qiskit framework
+    - Follow the exact function signature if specified
+
+    Answer requirements:
+    - Give ONE direct solution without alternatives
+    - DO NOT reference "the code above", "this example"
+    - DO NOT add tips, hints, or extra commentary
+    - DO NOT include URLs or links
+
+  test_generation_system: |
+    Reasoning: high.
+    You are an expert at writing unit tests for Qiskit quantum computing code.
+    Generate pytest-compatible tests that verify functional correctness.
+
+    Requirements:
+    - Use pytest with standard assertions
+    - Include ALL necessary imports
+    - Use Qiskit's comparison utilities:
+      - Operator.equiv() for circuit/operator comparison
+      - Statevector.equiv() for state comparison
+      - numpy.allclose() for numerical comparisons
+    - NO comments in test code
+    - Tests must be deterministic and reproducible
+    - For circuits with measurements, check counts distribution patterns
+    - Test must verify the FUNCTION behavior, not implementation details
+
+  # === QUESTION TYPE PROMPTS ===
+
+  function_completion_prompt: |
+    Based on the provided context, create a function completion task in Qiskit HumanEval format.
+
+    Context:
     {context}
 
-    Important:
-    - Write as if you are a real user asking for help
-    - Be natural; the user won't appreciate it. It's not friendly. Be objective and concise, but include the necessary details
-    - The question MUST be self-contained: if you reference any formula, circuit, code, image, or concept from the content, INCLUDE IT in the question
-    - If referencing formulas or circuits, write them out in the question
-    - DO NOT include difficulty level, hints, or task names in the question
-    - DO NOT use formatting like "**Task**" or "*Hint:*"
-    - DO NOT include phrases like "Any guidance", "Any concrete example", "Any help", "Any help with", "would be appreciated" ... just ask the question
-    - Be specific and include relevant details from the content, but don't be too verbose
+    Generate a task with:
+    1. A function signature with type hints
+    2. A docstring explaining what the function should do
+    3. Necessary imports if critical
 
-    Return ONLY the question text as a user would write it.
+    Format your response as:
+    ```python
+    from qiskit import QuantumCircuit
+    # other imports as needed
 
-  answer_generation: |
+    def function_name(param1: Type1, param2: Type2) -> ReturnType:
+        """
+        Brief description of what the function should do.
+        
+        Args:
+            param1: Description
+            param2: Description
+            
+        Returns:
+            Description of return value
+        """
+        pass
+    ```
+
+    Requirements:
+    - Function must be testable (returns a value or modifiable object)
+    - Task should be specific and well-defined
+    - Based on actual patterns from the context
+    - NO implementation, only signature and docstring
+
+  code_generation_prompt: |
+    Based on the provided context, create a code generation task (Qiskit HumanEval Hard format).
+
+    Context:
+    {context}
+
+    Generate a direct, actionable task description that:
+    - Requires complete code implementation
+    - Is specific about what needs to be implemented
+    - Can be 1-2 sentences maximum
+    - Specifies the function name and arguments at the end
+
+    Format: [Task description]. You must implement this using a function named `function_name` with the following arguments: arg1, arg2.
+
+    Examples:
+    - "Create a 3-qubit GHZ state circuit and return it. You must implement this using a function named `create_ghz` with no arguments."
+    - "Return a phi+ Bell statevector. You must implement this using a function named `create_bell_statevector` with no arguments."
+    - "Generate a QuantumCircuit with n qubits and apply Hadamard gates to all. You must implement this using a function named `create_superposition` with the following arguments: n_qubits."
+
+    Return ONLY the task description.
+
+  qa_prompt: |
+    Based on the provided context, generate a question focused on quantum computing concepts, theory, or explanation.
+
+    Context:
+    {context}
+
+    This is for QA (theory/concepts), NOT code generation. Focus on:
+    - Conceptual understanding (superposition, entanglement, measurement)
+    - Theoretical explanations (algorithms, protocols, principles)
+    - Visual interpretation (if image: analyze circuits, diagrams, results)
+    - Analysis (what happens when, why does, how does)
+
+    For multimodal QA (with image):
+    - Ask for interpretation, explanation, or analysis of visual content
+    - Reference specific visual elements that need explanation
+    - Make the image essential for answering
+
+    Requirements:
+    - Keep it direct and objective (1-2 sentences)
+    - DO NOT ask for code implementation
+    - Make it self-contained
+
+    Return ONLY the question text.
+
+  # === ANSWER GENERATION PROMPTS ===
+
+  answer_with_test_prompt: |
+    Generate a reference solution that passes the unit test.
+
+    Task: {question}
+
+    Unit Test (your code MUST pass this):
+    ```python
+    {test_code}
+    ```
+
+    Context:
+    {context}
+
+    Requirements:
+    - Include ALL necessary imports
+    - Implement the EXACT function signature expected by the test
+    - Code must be complete and executable
+    - NO comments in code
+    - Return ONLY the Python code in a single code block
+
+  answer_without_test_prompt: |
+    Answer the following question about quantum computing.
+
     Question: {question}
 
     Context:
     {context}
 
-    Provide a clear, accurate answer focusing on Qiskit. 
-    Include code examples when relevant.
+    Requirements:
+    - Be clear, accurate, and based on the provided context
+    - If including code, ensure it is complete and executable
+    - NO comments in code snippets
+    - Be concise and direct
 
-    Important:
-    - Just give one response, without different options or methods
-    - For code responses: Put all code in just one code block, create objective clean code with typing and best patterns and minimal comments
-    - DO NOT add tips, hints, or extra messages  
-    - DO NOT include phrases like "Happy coding!", "Feel free to tweak...", or similar closings
-    - DO NOT use PennyLane or other frameworks unless specifically asked
-    - DO NOT include any links or URLs
-    - Focus on direct, helpful answers without extra commentary
-    - Be objective and concise
+  # === QUALITY CONTROL PROMPTS ===
 
-  summary_generation: |
-    Reasoning: medium
-    Based on this content, generate a natural self-contained question where a user asks for a summary or explanation of a quantum computing concept or topic.
+  content_filter_system: |
+    Reasoning: high.
+    You are a content quality filter for quantum computing training data.
+    Determine if content can be used to generate educational questions about quantum computing, Qiskit, physics, mathematics, or code.
 
-    Content:
-    {context}
-
-    Important:
-    - Write as if you are a user requesting a summary or overview
-    - The question MUST be self-contained: include specific concepts, formulas, or topics you're asking about
-    - Examples: "Can you summarize the quantum Fourier transform and its applications in Shor's algorithm?", "What are the key differences between VQE and QAOA optimization approaches?"
-    - DO NOT use vague references like "this topic", "the above", "the document"
-    - DO NOT include difficulty level or task names in the question
-    - Be specific about what you want summarized
-    - Make it sound natural and conversational
-
-    Return ONLY the question text as a user would write it.
-
-  caption_generation: |
-    Context:
-    {context}
-
-    Image description: {image_description}
-
-    Generate a natural question about what is shown in this image related to quantum computing or Qiskit.
-
-    Important:
-    - The image provides the visual context, so DO NOT describe the image in the question
-    - Ask about the concept, circuit, or diagram shown
-    - Examples: "How do I implement this circuit in Qiskit?", "Can you explain what this quantum state represents?"
-    - Make it sound like a real user asking about the image
-    - DO NOT use phrases like "the image above" or "shown in the image"
-
-    Return ONLY the question text.
-
-  code_generation: |
-    Reasoning: medium
-    Based on this content, generate a natural self-contained coding question a developer would ask about implementing concepts in Qiskit.
-
-    Content:
-    {context}
-
-    Important:
-    - Write as a real developer seeking help
-    - The question MUST be self-contained: if you reference specific algorithms, circuits, or approaches, describe them briefly in the question
-    - Include relevant details like "I want to implement a VQE circuit for H2 molecule" instead of "implement this algorithm"
-    - DO NOT use phrases like "the code above", "this implementation", "the example shown" without including specifics
-    - DO NOT include task labels like "Coding Task - Easy" or difficulty indicators
-    - DO NOT add hints or tips in the question
-    - Make it specific and practical
-    - Be clear about what you want to implement
-
-    Return ONLY the question text as a developer would write it.
+    Respond in this format:
+    DECISION: yes/no
+    REASON: Brief explanation (one sentence)
 
   content_quality_check: |
-    Reasoning: low
-    This content can be used for educational purposes or to generate questions about topics such as quantum computing, physics, mathematics, or code. For example, someone reading or viewing this content could formulate a question, request code, a summary, or an explanation... (not bibliography, logos, or noise).
+    Can this content be used to generate a training sample about quantum computing, circuits, physics, mathematics, or code?
+    (Not bibliography, logos, noise, or random data without interpretability)
 
     {content}
 
-    Answer ONLY 'yes' or 'no'.
+    DECISION: yes/no
+    REASON: Brief explanation
+
+  image_filter_system: |
+    Reasoning: high.
+    You are an image quality filter for training data.
+    Determine if an image is educationally relevant based on its transcription.
+    Consider if it shows quantum concepts, circuits, diagrams, charts, graphs, formulas, or visualizations.
+
+    Respond in this format:
+    DECISION: yes/no
+    REASON: Brief explanation (one sentence)
 
   image_quality_check: |
-    Reasoning: low
-    Based on the image transcription, is this image educationally relevant for quantum computing training data?
-    Consider if it shows quantum concepts, circuits, diagrams, or visualizations (not just decorative elements or logos).
-
     Image transcription: {transcription}
 
     {context}
 
-    Answer ONLY 'yes' or 'no'.
+    DECISION: yes/no
+    REASON: Brief explanation
+
+  image_transcription_system: |
+    You are an expert in quantum computing, physics, and mathematics.
+    Provide a detailed, objective technical description of the image.
+
+    For quantum circuits:
+    - Identify each qubit line (q_0, q_1, etc.)
+    - List each gate type, position, and target qubit(s)
+    - Specify rotation angles for parameterized gates
+    - Describe CNOT/controlled gates connections
+
+    For charts/histograms:
+    - Describe axis labels, units, and ranges
+    - Identify key data points and values
+
+    For diagrams/formulas:
+    - Transcribe formulas using LaTeX notation
+    - Describe structure and connections
 
   image_transcription: |
-    Provide a detailed, objective and technical description of this image related to quantum computing, mathematics, or physics.
-    If the image is not related to quantum computing, mathematics, or physics, describe in simple terms what it is.
-    Focus on:
-    - Key visual elements (circuits, gates, qubits, states, diagrams, formulas, graphs, etc.), how they interact
-    - Mathematical notation or formulas if present
-    - Any labels, legends, or annotations that help understand the image
-    - Charts or graphs description if present
+    Provide a detailed technical description of this image related to quantum computing, mathematics, or physics.
 
-    The idea is that it should be possible to understand the image without looking at it.
+  # === CLASSIFICATION AND CURATION ===
 
-  category_classification: |
-    Reasoning: low
-    Classify into ONE category:
+  category_classification_system: |
+    Reasoning: high.
+    You are a content classifier. Classify content into ONE of the following categories:
 
     {categories}
 
-    Content: {content}
-
     Return ONLY the category name.
 
-  qa_curation: |
-    Reasoning: low
-    You are a quality control filter. Evaluate if this Q&A pair passes quality standards.
+  category_classification: |
+    Content: {content}
+
+  sample_curation_system: |
+    Reasoning: high.
+    You are a quality control expert for quantum computing training data.
+    Evaluate if samples meet high standards for fine-tuning language models.
+
+    CORRECTNESS CHECKS:
+    1. Answer invents information not in quantum computing facts
+    2. Answer uses non-Qiskit frameworks
+    3. Answer is incomplete or truncated
+    4. Answer doesn't address the question
+    5. Context leakage (references "the provided code", "the image above")
+    6. Factual errors in physics, math, or implementation
+
+
+    MULTIMODAL CHECKS (if has image):
+    11. Image is essential to the task, not decorative
+    12. Task references specific visual elements
+    13. Answer correctly interprets visual information
+
+    FORMATTING:
+    14. No excessive repetition
+    15. No inappropriate language
+    16. No URLs or links
+    17. No pleasantries ("Happy coding!", etc.)
+
+    Respond:
+    DECISION: PASS/REJECT
+    REASON: Brief explanation (one sentence, only if REJECT)
+
+  sample_curation: |
+    Type: {question_type}
+    Multimodal: {has_image}
+    Has Test: {has_test}
 
     Question: {question}
 
     Answer: {answer}
 
-    Check for the following issues (respond "REJECT" if ANY are found):
-    1. Hallucinations: Answer invents information not supported by quantum computing facts
-    2. Word repetition: Answer has excessive word or phrase repetition
-    3. Off-topic: Answer doesn't address the question or discusses unrelated topics
-    4. Links/URLs: Answer contains any web links or URLs
-    5. Inappropriate content: Answer has unprofessional language or irrelevant commentary
-    6. Wrong framework: Answer uses PennyLane or non-Qiskit frameworks when Qiskit was requested
-    7. Incomplete: Answer is truncated or ends mid-sentence
+    Test Code: {test_code}
 
-    If the answer passes ALL checks, respond "PASS".
-    If the answer fails ANY check, respond "REJECT".
-
-    Return ONLY one word: "PASS" or "REJECT".
+    DECISION: PASS/REJECT
+    REASON: Brief explanation
 
 generation:
-  target_samples: 30 #30000
+  target_samples: 50
 
   question_model: question-model
   vision_model: vision-model
   answer_model: answer-model
   curate_model: curate-model
+  filter_model: curate-model
+  classify_model: curate-model
 
-  llm_batch_size: 32 # LLM batch size
-  llm_concurrency: 10 # LLM concurrent requests (from benchmark: 1.10 req/s)
-  vlm_batch_size: 16 # VLM batch size
-  vlm_concurrency: 16 # VLM concurrent requests (from benchmark: 0.478 req/s)
+  llm_batch_size: 32
+  llm_concurrency: 10
+  vlm_batch_size: 32
+  vlm_concurrency: 10
 
   multimodal_ratio: 0.5
 
   question_types:
+    - function_completion
+    - code_generation
     - qa
-    - code
-    - caption
-    - summary
 
   question_type_weights:
+    function_completion: 1.0
+    code_generation: 1.0
     qa: 1.0
-    code: 1.0
-    caption: 1.0
-    summary: 1.0
 
-  difficulty_levels:
-    - easy
-    - medium
-    - hard
-
-  difficulty_weights:
-    easy: 1.0
-    medium: 1.0
-    hard: 1.0
-
-  max_context_length: 2048
-  chunk_overlap: 200
+  max_context_length: 3200
+  chunk_overlap: 0
 
   enable_image_transcription: true
   enable_content_filtering: true
+  enable_curate_filtering: true
   enable_deduplication: true
   similarity_threshold: 0.85
 
+  enable_code_verification: true
+  code_verification_max_iterations: 3
+  code_verification_timeout: 60
+  code_verification_concurrency: 5
+
+  test_validation_timeout: 60
+
 dataset:
-  name: quantum-assistant-30k
+  name: quantum-multimodal
   description: |
-    Synthetic multimodal dataset for quantum computing with Qiskit.
-    14 categories, balanced distribution, multiple difficulty levels.
+    High-quality multimodal dataset for quantum computing with Qiskit.
+    Three input types: function_completion, code_generation, qa.
+    Code samples include unit tests for verification.
+    Balanced distribution across 14 categories.
 
   parsed_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/parsed
   generated_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/generated

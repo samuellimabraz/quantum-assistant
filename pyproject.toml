@@ -22,6 +22,16 @@ dependencies = [
     "rich>=13.0.0",
     "pymupdf>=1.23.0",
     "python-dotenv>=1.0.0",
+    "qiskit>=2.2.3",
+    "scipy>=1.15.3",
+    "pytest>=9.0.0",
+    "wand>=0.6.13",
+    "pip>=25.3",
+    "qiskit-machine-learning>=0.8.2",
+    "qiskit-ibm-runtime>=0.43.1",
+    "qiskit-aer>=0.17.2",
+    "torch>=2.9.1",
+    "qiskit-addon-sqd>=0.12.0",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +42,8 @@ dev = [
 ]
 
 [project.scripts]
-synthetic-data = "synthetic_data.cli:app"
+synthetic-data = "synthetic_data.cli.main:app"
+evaluate = "evaluate.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
