@@ -1,0 +1,42 @@
+# Evaluation Configuration Example
+
+# Model Configuration
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 8192
+  temperature: 0.0 # Greedy decoding
+  timeout: 300.0
+  is_vlm: false
+
+# Dataset Configuration
+dataset:
+  type: "qiskit_humaneval" # "qiskit_humaneval" or "synthetic"
+  path: "/Users/samuel/Developer/avante/unifei/tcc/qiskit-human-eval/dataset/dataset_qiskit_test_human_eval_hard.json"
+  images_dir: null
+  max_samples: null
+  dataset_variant: null
+
+# Metrics Configuration
+metrics:
+  # For code evaluation (Qiskit HumanEval)
+  num_samples_per_task: 1
+  k_values: [1]
+  execution_timeout: 30
+  max_concurrent: 20
+
+  # For text evaluation (Synthetic dataset)
+  num_predictions: 1 # Predictions per sample
+
+  # System prompt configuration
+  system_prompt_type: "qiskit_humaneval"
+  custom_system_prompt: null
+
+  verify_canonical: false
+
+# Output Configuration
+output:
+  results_file: null
+  results_dir: "outputs/evaluate"
+  auto_filename: true
