@@ -62,9 +62,7 @@ class JupyterParser(DocumentParser):
             "kernel": nb.metadata.get("kernelspec", {}).get("name", ""),
             "language": nb.metadata.get("language_info", {}).get("name", "python"),
             "cell_count": len(nb.cells),
-            "output_images": sum(
-                1 for img in images if img.path.startswith("notebook_output:")
-            ),
+            "output_images": sum(1 for img in images if img.path.startswith("notebook_output:")),
         }
 
         return Document(
@@ -86,17 +84,13 @@ class JupyterParser(DocumentParser):
                         return line[2:].strip()
         return ""
 
-    def _extract_markdown_images(
-        self, markdown: str, source_path: Path
-    ) -> list[ImageReference]:
+    def _extract_markdown_images(self, markdown: str, source_path: Path) -> list[ImageReference]:
         """Extract image references from markdown content, including data URIs."""
         images = []
 
-        # ![alt](path)
-        pattern = r"!\[(.*?)\]\((.*?)\)"
-        matches = re.finditer(pattern, markdown)
-
-        for match in matches:
+        # Pattern 1: Markdown format ![alt](path)
+        md_pattern = r"!\[(.*?)\]\((.*?)\)"
+        for match in re.finditer(md_pattern, markdown):
             alt_text = match.group(1)
             img_path = match.group(2).strip()
 
@@ -112,13 +106,41 @@ class JupyterParser(DocumentParser):
 
             # Handle data URI image
             if img_path.startswith("data:image/") and self.image_resolver:
-                extracted_path = self.image_resolver.extract_data_uri_image(
-                    img_path, source_path
-                )
+                extracted_path = self.image_resolver.extract_data_uri_image(img_path, source_path)
                 images.append(
                     ImageReference(
                         path=img_path[:50] + "..." if len(img_path) > 50 else img_path,
                         alt_text=alt_text or "Inline image",
+                        context=context,
+                        resolved_path=str(extracted_path) if extracted_path else None,
+                    )
+                )
+            else:
+                images.append(
+                    ImageReference(
+                        path=img_path,
+                        alt_text=alt_text,
+                        context=context,
+                    )
+                )
+
+        # Pattern 2: HTML format <img src="path" alt="text" ...>
+        html_pattern = r'<img[^>]+src=["\'](.*?)["\'](?:[^>]+alt=["\'](.*?)["\'])?[^>]*>'
+        for match in re.finditer(html_pattern, markdown):
+            img_path = match.group(1).strip()
+            alt_text = match.group(2) if match.group(2) else ""
+
+            start = max(0, match.start() - 100)
+            end = min(len(markdown), match.end() + 100)
+            context = markdown[start:end].strip()
+
+            # Handle data URI in HTML img tags
+            if img_path.startswith("data:image/") and self.image_resolver:
+                extracted_path = self.image_resolver.extract_data_uri_image(img_path, source_path)
+                images.append(
+                    ImageReference(
+                        path=img_path[:50] + "..." if len(img_path) > 50 else img_path,
+                        alt_text=alt_text or "HTML inline image",
                         context=context,
                         resolved_path=str(extracted_path) if extracted_path else None,
                     )
@@ -222,7 +244,8 @@ class JupyterParser(DocumentParser):
         text_data = output.get("data", {}).get("text/plain", "")
         if text_data:
             text_preview = (
-                text_data[:100] if isinstance(text_data, str) and len(text_data) > 100
+                text_data[:100]
+                if isinstance(text_data, str) and len(text_data) > 100
                 else text_data
             )
             return f"Code: {code_preview}\nOutput: {text_preview}"
