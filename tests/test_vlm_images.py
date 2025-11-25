@@ -7,7 +7,7 @@ from synthetic_data.models import VLMClient
 
 
 def test_vlm_with_images():
-    """Test VLM client with various image formats."""
+    """Test VLM client with various image formats using config prompts."""
     load_dotenv()
 
     base_url = os.getenv("VISION_MODEL_BASE_URL")
@@ -22,9 +22,29 @@ def test_vlm_with_images():
         base_url=base_url,
         api_key=api_key,
         model_name=model_name,
-        max_tokens=100,
-        temperature=0.3,
+        max_tokens=4096,
+        temperature=0.1,
     )
+
+    # System and user prompts matching config.yaml
+    system_prompt = """You are an expert in quantum computing, physics, and mathematics.
+Your task is to transcribe and describe images for a blind person who needs to understand the technical content.
+- Be extremely detailed and precise.
+- Use LaTeX formatting for math formulas.
+- Describe circuit connections, gates, and qubits explicitly.
+- Describes charts, graphs, and tables explicitly.
+- Ignore UI elements, window borders, or irrelevant background.
+- Focus on the technical content."""
+
+    user_prompt = """Provide a detailed, objective and technical description of this image related to quantum computing, mathematics, or physics.
+If the image is not related to quantum computing, mathematics, or physics, describe in simple terms what it is.
+Focus on:
+- Key visual elements (circuits, gates, qubits, states, diagrams, formulas, graphs, etc.), how they interact
+- Mathematical notation or formulas if present
+- Any labels, legends, or annotations that help understand the image
+- Charts or graphs description if present
+
+The idea is that it should be possible to understand the image without looking at it."""
 
     test_images = Path("assets/tests")
     if not test_images.exists():
@@ -45,18 +65,10 @@ def test_vlm_with_images():
         print(f"  Size: {img_path.stat().st_size / 1024:.1f} KB")
 
         try:
-            prompt = """Provide a detailed, objective and technical description of this image related to quantum computing, mathematics, or physics.
-    If the image is not related to quantum computing, mathematics, or physics, describe in simple terms what it is.
-    Focus on:
-    - Key visual elements (circuits, gates, qubits, states, diagrams, formulas, graphs, etc.), how they interact
-    - Mathematical notation or formulas if present
-    - Any labels, legends, or annotations that help understand the image
-    - Charts or graphs description if present
-
-    The idea is that it should be possible to understand the image without looking at it."""
             response = client.generate_with_image(
-                text=f"{prompt}",
+                text=user_prompt,
                 image_path=img_path,
+                system_prompt=system_prompt,
                 max_tokens=4096,
             )
 

@@ -1,5 +1,3 @@
-"""Comprehensive testing script for each pipeline step."""
-
 import asyncio
 import json
 import sys
@@ -7,7 +5,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from PIL import Image, ImageDraw
@@ -25,7 +22,6 @@ from synthetic_data.utils import PipelineCache, QualityFilter
 
 console = Console()
 
-# Create timestamped output directory
 TEST_RUN_DIR = None
 
 
@@ -59,7 +55,6 @@ def get_limited_documents(config: PipelineConfig, ingestion: DocumentIngestion, 
                         break
                 files_to_process = files_to_process[: source.max_files]
 
-            # Parse limited files directly with full processing
             for file_path in files_to_process:
                 try:
                     for parser in ingestion.parsers:
@@ -82,7 +77,6 @@ def get_limited_documents(config: PipelineConfig, ingestion: DocumentIngestion, 
                 except Exception:
                     pass
         else:
-            # No limit, use regular ingestion
             docs = ingestion.ingest_source(source)
             documents.extend(docs[: max_docs - len(documents)])
             if len(documents) >= max_docs:
@@ -145,7 +139,6 @@ def test_model_connections(config: PipelineConfig):
             console.print(f"Response: {test_response}")
             console.print(f"Response length: {len(test_response)}")
 
-            # Test answer model
             console.print("  Testing answer model...")
             answer_client = registry.get_llm_client(config.generation.answer_model)
             test_response = answer_client.generate(
@@ -205,11 +198,9 @@ def test_document_parsing(config: PipelineConfig):
         for source in config.sources:
             console.print(f"  Processing source: {source.path}")
 
-            # Apply max_files limit if set
             if source.max_files:
                 console.print(f"  [yellow]Limited to {source.max_files} files[/yellow]")
 
-                # Get limited set of files
                 source_path = Path(source.path)
                 files_to_process = []
                 if source_path.is_file():
@@ -222,7 +213,6 @@ def test_document_parsing(config: PipelineConfig):
                             break
                     files_to_process = files_to_process[: source.max_files]
 
-                # Parse only the limited files
                 documents = []
                 for file_path in files_to_process:
                     try:
@@ -257,7 +247,6 @@ def test_document_parsing(config: PipelineConfig):
         table.add_row("Total Code Blocks", str(total_code_blocks))
         console.print(table)
 
-        # Save parsing results
         if TEST_RUN_DIR:
             parsing_summary = {
                 "total_documents": total_docs,
@@ -313,23 +302,21 @@ def test_image_transcription(config: PipelineConfig):
                 images_output_dir=images_dir, image_transcriber=transcriber
             )
 
-            # Process limited documents for testing
             test_docs = get_limited_documents(config, ingestion, max_docs=3)
 
-            # Manually transcribe images for test docs (since helper bypasses transcription)
             if test_docs and transcriber:
                 console.print(f"  Transcribing images in {len(test_docs)} documents...")
                 total_images = sum(
                     1 for doc in test_docs for img in doc.images if img.resolved_path
                 )
-                transcribed = [0]  # Use list to avoid closure issues
+                transcribed = [0] 
 
                 def progress_cb(completed):
                     transcribed[0] = completed
                     console.print(f"\r  Progress: {completed}/{total_images}", end="")
 
                 asyncio.run(transcriber.transcribe_batch_documents_async(test_docs, progress_cb))
-                console.print()  # New line after progress
+                console.print()  
 
             transcribed_count = sum(
                 1 for doc in test_docs for img in doc.images if img.transcription
@@ -340,7 +327,6 @@ def test_image_transcription(config: PipelineConfig):
                 f"  [green]✓ Transcribed {transcribed_count}/{total_images} images[/green]"
             )
 
-            # Save transcription results
             if TEST_RUN_DIR:
                 transcription_data = {
                     "total_images": total_images,
@@ -361,7 +347,6 @@ def test_image_transcription(config: PipelineConfig):
                     json.dump(transcription_data, f, indent=2)
                 console.print(f"  [dim]Saved to: {TEST_RUN_DIR / '02_transcriptions.json'}[/dim]")
 
-            # Show a sample transcription
             for doc in test_docs:
                 for img in doc.images:
                     if img.transcription:
@@ -388,7 +373,6 @@ def test_chunking(config: PipelineConfig):
         images_dir = Path(config.dataset.images_dir)
         ingestion = DocumentIngestion(images_output_dir=images_dir)
 
-        # Get sample documents
         test_docs = get_limited_documents(config, ingestion, max_docs=3)
 
         chunker = ContentChunker(
@@ -401,7 +385,6 @@ def test_chunking(config: PipelineConfig):
             chunks = chunker.chunk_document(doc)
             all_chunks.extend(chunks)
 
-        # Analyze chunks
         avg_length = sum(len(c.text) for c in all_chunks) / len(all_chunks) if all_chunks else 0
         chunks_with_code = sum(1 for c in all_chunks if c.code_blocks)
         chunks_with_images = sum(1 for c in all_chunks if c.images)
@@ -415,7 +398,6 @@ def test_chunking(config: PipelineConfig):
         table.add_row("Chunks with Images", str(chunks_with_images))
         console.print(table)
 
-        # Save chunking results
         if TEST_RUN_DIR:
             chunk_summary = {
                 "total_chunks": len(all_chunks),
@@ -456,7 +438,6 @@ def test_quality_filtering(config: PipelineConfig):
         images_dir = Path(config.dataset.images_dir)
         ingestion = DocumentIngestion(images_output_dir=images_dir)
 
-        # Get sample documents with images
         test_docs = get_limited_documents(config, ingestion, max_docs=3)
 
         chunker = ContentChunker(
@@ -473,7 +454,6 @@ def test_quality_filtering(config: PipelineConfig):
             question_client = registry.get_llm_client(config.generation.question_model)
             quality_filter = QualityFilter(question_client)
 
-            # Test content filtering
             console.print(f"  Testing {len(all_chunks[:5])} chunks for quality...")
             content_passed = 0
             for chunk in all_chunks[:5]:
@@ -487,7 +467,6 @@ def test_quality_filtering(config: PipelineConfig):
 
             console.print(f"  [green]✓ Content filter: {content_passed}/5 chunks passed[/green]")
 
-            # Test image filtering
             images_to_test = [img for doc in test_docs for img in doc.images if img.transcription][
                 :3
             ]
@@ -506,7 +485,6 @@ def test_quality_filtering(config: PipelineConfig):
                     f"  [green]✓ Image filter: {images_passed}/{len(images_to_test)} images passed[/green]"
                 )
 
-            # Save filter results
             if TEST_RUN_DIR:
                 filter_summary = {
                     "content_tested": 5,
@@ -534,7 +512,6 @@ def test_category_classification(config: PipelineConfig):
         images_dir = Path(config.dataset.images_dir)
         ingestion = DocumentIngestion(images_output_dir=images_dir)
 
-        # Get sample documents
         test_docs = get_limited_documents(config, ingestion, max_docs=3)
 
         chunker = ContentChunker(
@@ -550,7 +527,6 @@ def test_category_classification(config: PipelineConfig):
             question_client = registry.get_llm_client(config.generation.question_model)
             category_manager = CategoryManager(config.categories, question_client)
 
-            # Classify chunks (no progress callback for test simplicity)
             chunks_by_category = category_manager.organize_by_category(
                 chunks[:10], config.prompts.category_classification  # Test with first 10 chunks
             )
@@ -566,7 +542,6 @@ def test_category_classification(config: PipelineConfig):
 
             console.print(table)
 
-            # Save classification results
             if TEST_RUN_DIR:
                 classification_summary = {
                     "total_categories": len(chunks_by_category),
@@ -604,7 +579,6 @@ def test_sample_generation(config: PipelineConfig):
         images_dir = Path(config.dataset.images_dir)
         ingestion = DocumentIngestion(images_output_dir=images_dir)
 
-        # Get sample documents
         test_docs = get_limited_documents(config, ingestion, max_docs=3)
 
         chunker = ContentChunker(
@@ -624,11 +598,9 @@ def test_sample_generation(config: PipelineConfig):
                 chunks[:15], config.prompts.category_classification
             )
 
-            # Generate samples (uses config target_samples)
-            pipeline = GenerationPipeline(config, registry, category_manager)
+            pipeline = GenerationPipeline(config, registry, category_manager, checkpoint_manager=None)
             samples = pipeline.generate_samples(chunks_by_category)
 
-            # Analyze samples
             table = Table(title="Generated Samples")
             table.add_column("Metric", style="cyan")
             table.add_column("Value", style="green", justify="right")
@@ -637,7 +609,6 @@ def test_sample_generation(config: PipelineConfig):
 
             console.print(table)
 
-            # Save samples
             if TEST_RUN_DIR and samples:
                 samples_file = TEST_RUN_DIR / "06_samples.jsonl"
                 with open(samples_file, "w") as f:
@@ -657,7 +628,6 @@ def test_sample_generation(config: PipelineConfig):
                         f.write("\n")
                 console.print(f"  [dim]Saved to: {samples_file}[/dim]")
 
-            # Show a sample
             if samples:
                 sample = samples[0]
                 console.print(f"\n  [dim]Sample Question:[/dim]")
@@ -685,10 +655,8 @@ def test_cache_functionality(config: PipelineConfig):
         cache_dir = Path(config.dataset.parsed_dir).parent / ".cache"
         cache = PipelineCache(cache_dir)
 
-        # Clear test cache first
         cache.clear_stage("test")
 
-        # Test document caching
         from synthetic_data.parsers.base import Document
 
         test_doc = Document(
@@ -700,29 +668,24 @@ def test_cache_functionality(config: PipelineConfig):
             metadata={"test": True},
         )
 
-        # Save to cache
         test_key = cache.get_stage_cache_key("test", {"test": True}, [Path("test.txt")])
         cache.save_documents("test", test_key, [test_doc])
         console.print("  [green]✓ Document saved to cache[/green]")
 
-        # Check if cached
         if cache.is_cached("test", test_key):
             console.print("  [green]✓ Cache detection working[/green]")
 
-        # Load from cache
         loaded_docs = cache.load_documents("test", test_key)
         if loaded_docs and len(loaded_docs) == 1:
             if loaded_docs[0].title == "Test Document":
                 console.print("  [green]✓ Cache loading successful[/green]")
 
-        # Get cache info
         info = cache.get_cache_info()
         if "test" in info:
             console.print(
                 f"  [green]✓ Cache info: {info['test']['count']} items, {info['test']['size']} bytes[/green]"
             )
 
-        # Clear test cache
         cache.clear_stage("test")
         if not cache.is_cached("test", test_key):
             console.print("  [green]✓ Cache clearing successful[/green]")
@@ -755,7 +718,6 @@ def main():
         )
     )
 
-    # Setup output directory for test results
     test_run_dir = setup_test_output_dir()
 
     start_time = time.time()
@@ -764,12 +726,10 @@ def main():
     test_results.add_column("Status", justify="center")
     test_results.add_column("Time", justify="right", style="yellow")
 
-    # Step 1: Config
     step_start = time.time()
     config = test_config_loading(config_path)
     test_results.add_row("1. Configuration", "[green]✓[/green]", f"{time.time() - step_start:.1f}s")
 
-    # Step 2: Model connections
     step_start = time.time()
     if not test_model_connections(config):
         test_results.add_row(
@@ -782,14 +742,12 @@ def main():
         "2. Model Connections", "[green]✓[/green]", f"{time.time() - step_start:.1f}s"
     )
 
-    # Step 3: Document parsing
     step_start = time.time()
     docs, _ = test_document_parsing(config)
     test_results.add_row(
         "3. Document Parsing", f"[green]✓[/green] ({docs} docs)", f"{time.time() - step_start:.1f}s"
     )
 
-    # Step 4: Image transcription
     step_start = time.time()
     transcribed = test_image_transcription(config)
     test_results.add_row(
@@ -798,7 +756,6 @@ def main():
         f"{time.time() - step_start:.1f}s",
     )
 
-    # Step 5: Chunking
     step_start = time.time()
     chunks = test_chunking(config)
     test_results.add_row(
@@ -807,7 +764,6 @@ def main():
         f"{time.time() - step_start:.1f}s",
     )
 
-    # Step 6: Quality filtering
     step_start = time.time()
     content_passed, images_passed = test_quality_filtering(config)
     if config.generation.enable_content_filtering:
@@ -819,7 +775,6 @@ def main():
     else:
         test_results.add_row("6. Quality Filter", "[yellow]⊘ disabled[/yellow]", "0.0s")
 
-    # Step 7: Category classification
     step_start = time.time()
     categories = test_category_classification(config)
     test_results.add_row(
@@ -828,7 +783,6 @@ def main():
         f"{time.time() - step_start:.1f}s",
     )
 
-    # Step 8: Sample generation
     step_start = time.time()
     samples = test_sample_generation(config)
     test_results.add_row(
@@ -837,7 +791,6 @@ def main():
         f"{time.time() - step_start:.1f}s",
     )
 
-    # Step 9: Cache functionality
     step_start = time.time()
     cache_ok = test_cache_functionality(config)
     test_results.add_row(
@@ -852,7 +805,6 @@ def main():
     console.print(test_results)
     console.print(f"\n[bold]Total test time: {total_time:.1f} seconds[/bold]")
 
-    # Save test summary
     if TEST_RUN_DIR:
         summary = {
             "test_run": datetime.now().isoformat(),
