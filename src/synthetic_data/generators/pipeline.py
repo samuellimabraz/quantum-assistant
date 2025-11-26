@@ -411,7 +411,7 @@ class GenerationPipeline:
     async def _batch_generate_tests_async(
         self,
         questions_data: list[dict],
-        _progress_callbacks: dict,
+        progress_callbacks: dict,
     ) -> list[dict]:
         """Generate unit tests for code types."""
         code_items = []
@@ -423,7 +423,14 @@ class GenerationPipeline:
                 code_items.append(item)
 
         if not code_items:
+            # No code items, mark test step as complete
+            if progress_callbacks.get("set_tests_total"):
+                progress_callbacks["set_tests_total"](0)
             return questions_data
+
+        # Set total for progress tracking
+        if progress_callbacks.get("set_tests_total"):
+            progress_callbacks["set_tests_total"](len(code_items))
 
         # Extract entry points from questions
         test_tasks = []
@@ -451,6 +458,7 @@ class GenerationPipeline:
         tests = await self.test_generator.generate_batch_tests_async(
             test_tasks,
             max_concurrent=self.gen_config.llm_concurrency,
+            progress_callback=progress_callbacks.get("tests"),
         )
 
         # Add test results to items
@@ -528,26 +536,47 @@ class GenerationPipeline:
     async def _validate_code_samples_async(
         self,
         answers_data: list[dict],
-        _progress_callbacks: dict,
+        progress_callbacks: dict,
     ) -> tuple[list[Sample], list[dict]]:
         """Validate code samples against their tests."""
         samples = []
         failures = []
+
+        # Count code items that need validation
+        code_items = [
+            item
+            for item in answers_data
+            if item["question_type"]
+            in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION)
+            and item.get("test_code")
+            and item.get("entry_point")
+        ]
+
+        # Set total for progress tracking
+        if progress_callbacks.get("set_code_validation_total"):
+            progress_callbacks["set_code_validation_total"](len(code_items))
+
+        validated_count = 0
 
         for item in answers_data:
             question_type = item["question_type"]
             test_code = item.get("test_code")
             entry_point = item.get("entry_point")
             answer = item["answer"]
+            question = item["question"]
 
             if question_type in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION):
                 if test_code and entry_point:
                     # Validate against test
                     passed, corrected_answer, attempts = (
                         await self.test_validator.validate_and_correct_async(
-                            answer, test_code, entry_point, item["question"]
+                            answer, test_code, entry_point, question, question_type.value
                         )
                     )
+
+                    validated_count += 1
+                    if progress_callbacks.get("code_validation"):
+                        progress_callbacks["code_validation"](validated_count)
 
                     if passed:
                         sample = self._create_sample(item, corrected_answer, test_code, entry_point)
@@ -555,7 +584,7 @@ class GenerationPipeline:
                     else:
                         failures.append(
                             {
-                                "question": item["question"],
+                                "question": question,
                                 "answer": answer,
                                 "test_code": test_code,
                                 "entry_point": entry_point,
@@ -579,7 +608,7 @@ class GenerationPipeline:
     async def _verify_qa_samples_async(
         self,
         samples: list[Sample],
-        _progress_callbacks: dict,
+        progress_callbacks: dict,
     ) -> tuple[list[Sample], list[dict]]:
         """Verify QA samples with code (syntax/execution only)."""
         verified = []
@@ -588,10 +617,18 @@ class GenerationPipeline:
         qa_samples = [s for s in samples if s.question_type == "qa"]
         other_samples = [s for s in samples if s.question_type != "qa"]
 
-        for sample in qa_samples:
+        # Set total for progress tracking
+        if progress_callbacks.get("set_qa_verification_total"):
+            progress_callbacks["set_qa_verification_total"](len(qa_samples))
+
+        for i, sample in enumerate(qa_samples):
             result = await self.code_verifier.verify_and_correct_sample_async(
                 sample.answer, sample.question
             )
+
+            # Update progress
+            if progress_callbacks.get("qa_verification"):
+                progress_callbacks["qa_verification"](i + 1)
 
             if result.is_valid:
                 if result.corrected_code:

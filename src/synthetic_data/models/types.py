@@ -7,18 +7,7 @@ from typing import Optional
 @dataclass
 class Sample:
     """Generated dataset sample.
-    
-    Represents a single training sample for quantum computing VLM fine-tuning.
-    
-    For function_completion and code_generation types:
-    - test_code: Unit test that validates the answer code
-    - entry_point: Function name that the test calls
-    - Answer must pass the test to be valid
-    
-    For qa type:
-    - No test required
-    - Code in answer is verified for syntax/execution only
-    
+
     Attributes:
         question: The input prompt/question
         answer: The reference solution/answer
@@ -43,7 +32,6 @@ class Sample:
     # Multimodal support
     image_path: Optional[str] = None
 
-    # Provenance
     source_path: Optional[str] = None
     metadata: dict = field(default_factory=dict)
 

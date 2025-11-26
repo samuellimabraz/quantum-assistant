@@ -1,11 +1,3 @@
-"""Prompt management for synthetic data generation.
-
-Handles dynamic prompt construction for the three question types:
-- function_completion: Code with signature + docstring, model completes
-- code_generation: Natural language task, model generates full code
-- qa: Theory/concepts, no unit test required
-"""
-
 from dataclasses import dataclass
 from typing import Optional
 
@@ -14,26 +6,26 @@ from synthetic_data.config.schema import QuestionType
 
 # Image-specific instructions appended to prompts when multimodal
 IMAGE_CONTEXT_INSTRUCTIONS = """
-IMAGE CONTEXT:
+MULTIMODAL INPUT REQUIREMENTS:
 - An image description is provided with specific visual information
 - The image content MUST be essential to understanding and answering
-- Reference SPECIFIC visual elements (gate types, qubit indices, angles, values)
-- For circuits: implement exactly what is shown
-- For diagrams/charts: analyze the specific data or structure shown
+- Reference SPECIFIC visual elements in your question/answer:
+  * For circuits: gate types (H, X, CNOT), qubit indices (q_0, q_1), angles (π/2, θ)
+  * For histograms: measurement outcomes (|00⟩, |11⟩), probabilities, shot counts
+  * For Bloch spheres: state vectors, rotation angles, axis directions
+  * For diagrams: labeled components, connections, mathematical expressions
+- The task MUST require examining the image to answer correctly
+- DO NOT make the image optional or decorative
+
+MULTIMODAL EXAMPLES:
+- function_completion: "Implement the circuit shown in the image" (docstring describes gates from image)
+- code_generation: "Create a circuit that produces the measurement distribution shown in the histogram"
+- qa: "Analyze the quantum circuit in the image. What state does it prepare?"
 """
 
 
 @dataclass
 class PromptSet:
-    """Set of prompts for generation tasks.
-
-    Organizes prompts by purpose:
-    - Question generation prompts (one per type)
-    - Answer generation prompts (with/without test)
-    - System prompts for different generation stages
-    - Quality control prompts
-    """
-
     # Question type prompts
     function_completion_prompt: str
     code_generation_prompt: str
@@ -167,7 +159,6 @@ def build_context(
     """
     parts = []
 
-    # Image description FIRST if available (most important for multimodal)
     if image_description:
         parts.append(f"[Image Description]\n{image_description}")
 
@@ -176,7 +167,7 @@ def build_context(
         parts.append(f"[Previous Context]\n{previous_text}")
 
     # Main content (truncated if needed)
-    main_text = chunk_text[:max_length] if len(chunk_text) > max_length else chunk_text
+    main_text = chunk_text
     parts.append(f"[Main Content]\n{main_text}")
 
     # Next context
@@ -191,29 +182,48 @@ def build_context(
 
 
 def extract_entry_point_from_prompt(prompt: str) -> Optional[str]:
-    """Extract function name from a function completion prompt.
+    """Extract function name from a function completion or code generation prompt.
 
     Looks for patterns like:
     - def function_name(
     - function named `function_name`
-    - named 'function_name'
+    - a function named `function_name`
+    
+    Avoids false positives like 'named', 'function', 'that', 'name', etc.
 
     Args:
-        prompt: The function completion prompt
+        prompt: The function completion or code generation prompt
 
     Returns:
         Function name or None
     """
     import re
 
-    # Pattern: def function_name(
+    # Priority 1: Qiskit HumanEval Hard pattern - "function named `name`" at end
+    # This is the most specific pattern
+    match = re.search(
+        r"function\s+named\s+[`'\"]([a-zA-Z_][a-zA-Z0-9_]*)[`'\"]",
+        prompt,
+        re.IGNORECASE
+    )
+    if match:
+        name = match.group(1)
+        # Filter out common false positives
+        if name.lower() not in ("name", "that", "this", "function", "it", "one"):
+            return name
+
+    # Priority 2: def function_name( pattern (for function completion stubs)
     match = re.search(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", prompt)
     if match:
-        return match.group(1)
+        name = match.group(1)
+        if name.lower() not in ("name", "that", "this", "function", "it", "one"):
+            return name
 
-    # Pattern: function named `function_name` or 'function_name'
-    match = re.search(r"(?:function|named)\s+[`'\"]?([a-zA-Z_][a-zA-Z0-9_]*)[`'\"]?", prompt, re.I)
+    # Priority 3: Look for backtick-quoted names after "named"
+    match = re.search(r"named\s+`([a-zA-Z_][a-zA-Z0-9_]*)`", prompt, re.IGNORECASE)
     if match:
-        return match.group(1)
+        name = match.group(1)
+        if name.lower() not in ("name", "that", "this", "function", "it", "one"):
+            return name
 
     return None

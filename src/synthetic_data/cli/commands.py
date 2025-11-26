@@ -1008,18 +1008,26 @@ def generate(
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        # Create tasks for each substep (will update totals dynamically)
-        questions_task = progress.add_task("Generating questions...", total=None)
-        answers_task = progress.add_task("Generating answers...", total=None)
-        verification_task = progress.add_task("Verifying code...", total=None)
-        curation_task = progress.add_task("Validating quality...", total=None)
+        # Create tasks for each generation step
+        questions_task = progress.add_task("Step 1: Questions...", total=None)
+        tests_task = progress.add_task("Step 2: Tests...", total=None)
+        answers_task = progress.add_task("Step 3: Answers...", total=None)
+        code_validation_task = progress.add_task("Step 4: Code validation...", total=None)
+        qa_verification_task = progress.add_task("Step 5: QA verification...", total=None)
+        curation_task = progress.add_task("Step 6: Quality curation...", total=None)
 
-        # Progress callbacks to update progress bars
+        # Progress callbacks for each step
         def set_questions_total(total):
             progress.update(questions_task, total=total)
 
         def update_question_progress(completed):
             progress.update(questions_task, completed=completed)
+
+        def set_tests_total(total):
+            progress.update(tests_task, total=total)
+
+        def update_tests_progress(completed):
+            progress.update(tests_task, completed=completed)
 
         def set_answers_total(total):
             progress.update(answers_task, total=total)
@@ -1027,11 +1035,17 @@ def generate(
         def update_answer_progress(completed):
             progress.update(answers_task, completed=completed)
 
-        def set_verification_total(total):
-            progress.update(verification_task, total=total)
+        def set_code_validation_total(total):
+            progress.update(code_validation_task, total=total)
 
-        def update_verification_progress(completed):
-            progress.update(verification_task, completed=completed)
+        def update_code_validation_progress(completed):
+            progress.update(code_validation_task, completed=completed)
+
+        def set_qa_verification_total(total):
+            progress.update(qa_verification_task, total=total)
+
+        def update_qa_verification_progress(completed):
+            progress.update(qa_verification_task, completed=completed)
 
         def set_curation_total(total):
             progress.update(curation_task, total=total)
@@ -1052,10 +1066,14 @@ def generate(
         progress_callbacks = {
             "set_questions_total": set_questions_total,
             "questions": update_question_progress,
+            "set_tests_total": set_tests_total,
+            "tests": update_tests_progress,
             "set_answers_total": set_answers_total,
             "answers": update_answer_progress,
-            "set_verification_total": set_verification_total,
-            "verification": update_verification_progress,
+            "set_code_validation_total": set_code_validation_total,
+            "code_validation": update_code_validation_progress,
+            "set_qa_verification_total": set_qa_verification_total,
+            "qa_verification": update_qa_verification_progress,
             "set_curation_total": set_curation_total,
             "curation": update_curation_progress,
             "save_rejected": save_rejected,

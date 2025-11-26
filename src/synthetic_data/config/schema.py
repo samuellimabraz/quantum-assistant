@@ -19,8 +19,7 @@ class SourceType(str, Enum):
 
 class QuestionType(str, Enum):
     """Type of question/prompt to generate.
-    
-    Three types aligned with Qiskit HumanEval evaluation formats:
+
     - FUNCTION_COMPLETION: Prompt with imports + function signature + docstring (model completes)
     - CODE_GENERATION: Direct task description (model generates full code)
     - QA: Theory/concepts (explanation, summary, analysis - no unit test required)

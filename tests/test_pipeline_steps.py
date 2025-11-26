@@ -309,14 +309,14 @@ def test_image_transcription(config: PipelineConfig):
                 total_images = sum(
                     1 for doc in test_docs for img in doc.images if img.resolved_path
                 )
-                transcribed = [0] 
+                transcribed = [0]
 
                 def progress_cb(completed):
                     transcribed[0] = completed
                     console.print(f"\r  Progress: {completed}/{total_images}", end="")
 
                 asyncio.run(transcriber.transcribe_batch_documents_async(test_docs, progress_cb))
-                console.print()  
+                console.print()
 
             transcribed_count = sum(
                 1 for doc in test_docs for img in doc.images if img.transcription
@@ -598,7 +598,9 @@ def test_sample_generation(config: PipelineConfig):
                 chunks[:15], config.prompts.category_classification
             )
 
-            pipeline = GenerationPipeline(config, registry, category_manager, checkpoint_manager=None)
+            pipeline = GenerationPipeline(
+                config, registry, category_manager, checkpoint_manager=None
+            )
             samples = pipeline.generate_samples(chunks_by_category)
 
             table = Table(title="Generated Samples")

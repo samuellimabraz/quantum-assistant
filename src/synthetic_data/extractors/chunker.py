@@ -23,7 +23,7 @@ class Chunk:
     next_chunk_text: str = ""
     all_document_code: list[str] = field(default_factory=list)
 
-    # Internal: track document positions for image association
+    # track document positions for image association
     _start_pos: int = 0
     _end_pos: int = 0
 
@@ -72,16 +72,13 @@ class ContentChunker:
         """
         chunks = []
 
-        # Clean content once for consistency
         cleaned_content = self._clean_content(document.content)
-
-        # Split into paragraphs
         paragraphs = self._split_paragraphs(cleaned_content)
 
         current_text = []
         current_length = 0
         chunk_id = 0
-        processed_length = 0  # Track total processed content length
+        processed_length = 0  
 
         for para in paragraphs:
             para_length = len(para)
@@ -99,7 +96,6 @@ class ContentChunker:
                 chunks.append(chunk)
                 chunk_id += 1
 
-                # Update processed length
                 processed_length += len(chunk_text)
 
                 # Start new chunk (with optional overlap)
@@ -108,7 +104,7 @@ class ContentChunker:
                     overlap_content = "\n\n".join(overlap_text)
                     current_text = overlap_text
                     current_length = len(overlap_content)
-                    processed_length -= len(overlap_content)  # Adjust for overlap
+                    processed_length -= len(overlap_content) 
                 else:
                     current_text = []
                     current_length = 0
@@ -124,7 +120,6 @@ class ContentChunker:
             )
             chunks.append(chunk)
 
-        # Associate images with chunks based on document position
         self._associate_images_by_position(chunks, document, cleaned_content)
 
         # Add neighbor context and full document code to each chunk
@@ -148,7 +143,6 @@ class ContentChunker:
         Returns:
             Chunk object (images will be associated later by position)
         """
-        # Extract code blocks from this chunk
         code_blocks = [cb for cb in document.code_blocks if cb in text]
 
         return Chunk(
@@ -156,7 +150,7 @@ class ContentChunker:
             source_path=document.source_path,
             chunk_id=chunk_id,
             code_blocks=code_blocks,
-            images=[],  # Will be populated by _associate_images_by_position
+            images=[],  
             metadata=document.metadata.copy(),
             _start_pos=start_pos,
             _end_pos=end_pos,
@@ -168,15 +162,12 @@ class ContentChunker:
 
         This ensures chunks don't contain base64 image data.
         """
-        # Remove data URI images entirely
         content = re.sub(r'<img[^>]+src="data:image/[^"]+?"[^>]*>', "", content)
         content = re.sub(r"!\[.*?\]\(data:image/[^)]+\)", "", content)
 
-        # Remove standalone HTML tags that create noise
         content = re.sub(r'<p\s+style="[^"]*">\s*$', "", content, flags=re.MULTILINE)
         content = re.sub(r"</p>\s*$", "", content, flags=re.MULTILINE)
 
-        # Collapse multiple blank lines
         content = re.sub(r"\n\n\n+", "\n\n", content)
 
         return content.strip()
@@ -195,7 +186,6 @@ class ContentChunker:
         current = []
 
         for line in content.split("\n"):
-            # Track code block state
             if line.strip().startswith("```"):
                 in_code_block = not in_code_block
 
@@ -207,7 +197,6 @@ class ContentChunker:
 
             current.append(line)
 
-            # Empty lines create paragraph breaks (if not in code block)
             if not in_code_block and line.strip() == "":
                 if current:
                     parts.append("\n".join(current))
@@ -216,7 +205,6 @@ class ContentChunker:
         if current:
             parts.append("\n".join(current))
 
-        # Filter out tiny/empty parts
         return [p.strip() for p in parts if p.strip() and len(p.strip()) > 10]
 
     def _get_overlap_text(self, text_parts: list[str]) -> list[str]:
@@ -258,11 +246,9 @@ class ContentChunker:
         unassigned_images = []
 
         for img in document.images:
-            # Skip images without transcription
             if not img.transcription:
                 continue
 
-            # Try to find image position in document using various markers
             image_pos = self._find_image_position(cleaned_content, img)
 
             if image_pos is None:
@@ -270,12 +256,10 @@ class ContentChunker:
                 unassigned_images.append(img)
                 continue
 
-            # Find the chunk that contains or is closest to this position
             best_chunk = None
             min_distance = float("inf")
 
             for chunk in chunks:
-                # Check if image position falls within chunk bounds
                 if chunk._start_pos <= image_pos <= chunk._end_pos:
                     best_chunk = chunk
                     break
@@ -309,21 +293,17 @@ class ContentChunker:
 
         # Strategy 2: Look for alt text markers
         if img.alt_text:
-            # Try markdown format
             marker = f"![{img.alt_text}]"
             if marker in content:
                 return content.find(marker)
 
-            # Try our clean marker format
             marker = f"[Image: {img.alt_text}]"
             if marker in content:
                 return content.find(marker)
 
-            # Try just the alt text
             if img.alt_text in content:
                 return content.find(img.alt_text)
 
-        # Strategy 3: If image has a resolved path, try to find filename
         if img.resolved_path:
             filename = Path(img.resolved_path).name
             if filename in content:

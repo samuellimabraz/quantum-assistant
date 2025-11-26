@@ -11,7 +11,7 @@ from synthetic_data.models.types import Sample
 
 class HuggingFaceExporter:
     """Export dataset to HuggingFace datasets format.
-    
+
     Exports samples with the following structure:
     - question: The input prompt/question
     - answer: The reference solution/answer
@@ -25,7 +25,7 @@ class HuggingFaceExporter:
 
     def __init__(self, config: DatasetConfig):
         """Initialize exporter.
-        
+
         Args:
             config: Dataset configuration
         """
@@ -38,12 +38,12 @@ class HuggingFaceExporter:
         test_samples: list[Sample],
     ) -> DatasetDict:
         """Export samples to HuggingFace DatasetDict.
-        
+
         Args:
             train_samples: Training samples
             val_samples: Validation samples
             test_samples: Test samples
-            
+
         Returns:
             DatasetDict with train/validation/test splits
         """
@@ -53,18 +53,20 @@ class HuggingFaceExporter:
         val_dataset = self._create_dataset(val_samples, features)
         test_dataset = self._create_dataset(test_samples, features)
 
-        return DatasetDict({
-            "train": train_dataset,
-            "validation": val_dataset,
-            "test": test_dataset,
-        })
+        return DatasetDict(
+            {
+                "train": train_dataset,
+                "validation": val_dataset,
+                "test": test_dataset,
+            }
+        )
 
     def save_to_disk(self, dataset_dict: DatasetDict) -> Path:
         """Save dataset to disk.
-        
+
         Args:
             dataset_dict: Dataset to save
-            
+
         Returns:
             Path to saved dataset
         """
@@ -72,23 +74,19 @@ class HuggingFaceExporter:
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Filter out empty splits
-        non_empty_dict = DatasetDict({
-            split: dataset
-            for split, dataset in dataset_dict.items()
-            if len(dataset) > 0
-        })
+        non_empty_dict = DatasetDict(
+            {split: dataset for split, dataset in dataset_dict.items() if len(dataset) > 0}
+        )
 
         if non_empty_dict:
             non_empty_dict.save_to_disk(str(output_path))
             print(f"\nDataset saved to {output_path}")
 
             import json
+
             manifest = {
                 "splits": list(dataset_dict.keys()),
-                "split_sizes": {
-                    split: len(dataset)
-                    for split, dataset in dataset_dict.items()
-                },
+                "split_sizes": {split: len(dataset) for split, dataset in dataset_dict.items()},
             }
             with open(output_path / "manifest.json", "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
@@ -100,7 +98,7 @@ class HuggingFaceExporter:
 
     def push_to_hub(self, dataset_dict: DatasetDict) -> None:
         """Push dataset to HuggingFace Hub.
-        
+
         Args:
             dataset_dict: Dataset to push
         """
@@ -113,16 +111,18 @@ class HuggingFaceExporter:
 
     def _create_features(self) -> Features:
         """Create HuggingFace features schema."""
-        return Features({
-            "question": Value("string"),
-            "answer": Value("string"),
-            "category": Value("string"),
-            "type": Value("string"),
-            "test_code": Value("string"),
-            "entry_point": Value("string"),
-            "image": Image(),
-            "source": Value("string"),
-        })
+        return Features(
+            {
+                "question": Value("string"),
+                "answer": Value("string"),
+                "category": Value("string"),
+                "type": Value("string"),
+                "test_code": Value("string"),
+                "entry_point": Value("string"),
+                "image": Image(),
+                "source": Value("string"),
+            }
+        )
 
     def _create_dataset(self, samples: list[Sample], features: Features) -> Dataset:
         """Create HuggingFace Dataset from samples."""
@@ -175,7 +175,7 @@ class HuggingFaceExporter:
         for pattern in patterns:
             if pattern in source_str:
                 idx = source_str.find(pattern)
-                return source_str[idx + len(pattern):]
+                return source_str[idx + len(pattern) :]
 
         path = Path(source_path)
         if path.exists():
@@ -261,12 +261,8 @@ class HuggingFaceExporter:
         test_count = len(dataset_dict["test"])
         total_count = train_count + val_count + test_count
 
-        multimodal_count = sum(
-            1 for sample in dataset_dict["train"] if sample["image"] is not None
-        )
-        code_with_tests = sum(
-            1 for sample in dataset_dict["train"] if sample["test_code"]
-        )
+        multimodal_count = sum(1 for sample in dataset_dict["train"] if sample["image"] is not None)
+        code_with_tests = sum(1 for sample in dataset_dict["train"] if sample["test_code"])
 
         card_content = f"""---
 license: {self.config.license}

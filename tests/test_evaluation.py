@@ -615,8 +615,6 @@ def create_circuit(n):
 ```"""
             combined = runner.combine_code(sample, generated_full)
 
-            # Should use generated code directly (not concatenate with prompt)
-            # because it contains the function definition
             assert combined.count("def create_circuit") == 1
             assert "SyntaxError" not in combined  # No invalid concatenation
             assert "return QuantumCircuit(n)" in combined

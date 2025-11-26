@@ -185,3 +185,4 @@ class MultimodalEvaluator(Evaluator):
             metadata={"question_types": list(by_type.keys())},
         )
 
+
