@@ -10,50 +10,29 @@ sources:
     exclude_patterns:
       - "**/node_modules/**"
       - "**/.git/**"
-    max_files: 40
+    max_files: 10
 
 categories:
-  - name: quantum_fundamentals
-    description: Superposition, measurement, Born's rule, uncertainty, wave-particle duality, Bloch sphere, quantum postulates, Dirac notation
+  - name: circuits_and_gates
+    description: Quantum circuits, standard gates (H, CX, CZ, etc.), parameterized gates, circuit construction, visualization, and transpilation basics.
 
-  - name: quantum_states_entanglement
-    description: Bell states, EPR, entanglement measures, cluster states, teleportation, nonlocality, quantum correlations
+  - name: algorithms_and_applications
+    description: Quantum algorithms (Shor, Grover, VQE, QAOA, QPE, etc.), quantum machine learning, optimization, and chemistry applications.
 
-  - name: quantum_gates_circuits
-    description: Pauli gates, Hadamard, CNOT, controlled gates, rotations, multi-control, QASM, circuit depth, transpilation
+  - name: transpilation_and_compilation
+    description: Pass managers, transpiler passes, circuit optimization, layout, routing, and pulse scheduling.
 
-  - name: quantum_algorithms
-    description: QFT, Grover, Shor, phase estimation, Simon, amplitude estimation, VQE, QAOA, algorithm complexity
+  - name: primitives_and_execution
+    description: SamplerV2, EstimatorV2, runtime sessions, batch processing, job management, and result retrieval.
 
-  - name: quantum_ml_optimization
-    description: Quantum kernels, QNNs, quantum classifiers, GAN, hybrid pipelines, parameterized circuits, data encoding
+  - name: noise_and_error_mitigation
+    description: Noise models, error mitigation techniques (ZNE, TREX, PEC), dynamical decoupling, and quantum error correction.
 
-  - name: quantum_simulation_hamiltonians
-    description: Trotter-Suzuki, qDRIFT, Hamiltonian simulation, Heisenberg Ising models, Jordan-Wigner, time evolution
+  - name: quantum_info_and_operators
+    description: Statevectors, density matrices, operators, channels, entanglement measures, fidelity, and tomography.
 
-  - name: quantum_error_correction_noise
-    description: Error correction codes, stabilizers, surface codes, Lindblad, decoherence, noise mitigation, benchmarking
-
-  - name: quantum_information_communication
-    description: Quantum cryptography, BB84, E91, superdense coding, channel capacity, quantum networks, secret sharing
-
-  - name: variational_hybrid_approaches
-    description: VQE, QAOA, SSVQE, VQSD, loss landscapes, optimizer choices, initialization strategies
-
-  - name: quantum_thermodynamics
-    description: Gibbs states, entropy, thermalization, adiabatic theorem, work extraction, open quantum systems
-
-  - name: advanced_topological
-    description: Topological qubits, anyons, Kitaev models, Yang-Baxter, topological states, braiding
-
-  - name: frameworks_tooling
-    description: Qiskit, PennyLane, OpenQASM, QuTiP, SDK differences, backend selection, transpiler, QASM generation
-
-  - name: hardware_backends
-    description: NISQ constraints, qubit connectivity, readout errors, calibration, noise models, simulators, resource estimation
-
-  - name: education_meta
-    description: Benchmarks, tutorials, best practices, reproducibility, educational exercises, introductory content
+  - name: hardware_and_providers
+    description: Backend properties, target constraints, ISA circuits, and Qiskit Runtime service configuration.
 
 models:
   endpoints:
@@ -61,22 +40,23 @@ models:
       base_url: ${VISION_MODEL_BASE_URL}
       api_key: ${VISION_MODEL_API_KEY}
       model_name: ${VISION_MODEL_NAME}
-      max_tokens: 8192
+      max_tokens: 4096
       temperature: 0.2
 
     - name: question-model
       base_url: ${QUESTION_MODEL_BASE_URL}
       api_key: ${QUESTION_MODEL_API_KEY}
       model_name: ${QUESTION_MODEL_NAME}
-      max_tokens: 16384
-      temperature: 0.5
+      max_tokens: 8192
+      temperature: 0.4
+      service_tier: "auto"
 
     - name: answer-model
       base_url: ${ANSWER_MODEL_BASE_URL}
       api_key: ${ANSWER_MODEL_API_KEY}
       model_name: ${ANSWER_MODEL_NAME}
-      max_tokens: 16384
-      temperature: 0.3
+      max_tokens: 4096
+      temperature: 0.2
       service_tier: "auto"
 
     - name: curate-model
@@ -84,181 +64,624 @@ models:
       api_key: ${CURATE_MODEL_API_KEY}
       model_name: ${CURATE_MODEL_NAME}
       max_tokens: 4096
-      temperature: 0.2
+      temperature: 0.0
+      service_tier: "auto"
 
 prompts:
-  # === SYSTEM PROMPTS ===
+  # =============================================================================
+  # INPUT GENERATION SESSION PROMPTS
+  # =============================================================================
 
-  question_generation_system: |
+  input_generation_system: |
     Reasoning: high.
-    You are an expert at creating high-quality training data for quantum computing AI models.
-    Generate concise, direct questions/tasks based ONLY on the provided context.
+    You are an expert at creating high-quality training data for quantum computing models using Qiskit.
+    You will generate questions/tasks and their unit tests based EXCLUSIVELY on the provided context.
 
-    Critical requirements:
+    CRITICAL: GROUND ALL CONTENT IN CONTEXT
+    - ALL tasks, questions, and code MUST be based directly on the provided context
+    - Use code patterns, examples, and concepts from the context document
+    - DO NOT invent new code or modify existing code from context
+    - If context contains working Qiskit code, use it as-is or adapt it minimally
+    - The context includes: document text, code blocks, image transcriptions, and related code
+
+    STRICT QUALITY CONTROL:
+    - REJECT trivial Python tasks (sorting, string manipulation) unless they involve quantum data processing
+    - TASKS MUST REQUIRE QISKIT: Solutions must involve QuantumCircuit, Operator, Statevector, etc.
+    - Base tasks on specific patterns from the provided context
     - Questions must be self-contained with all necessary information
-    - DO NOT reference "the provided code", "the context", "the image above"
-    - DO NOT use polite phrases ("Please", "Could you", "Would you")
-    - DO NOT use formatting markers ("**Task**", "*Hint:*")
-    - Be direct and objective without unnecessary embellishment
-    - Focus on what can be verified and tested
-    - Base questions on actual content, not model knowledge
+    - DO NOT reference "the context" or "the provided code" in the question text itself
+
+    API MAPPING:
+    - assign_parameters() NOT bind_parameters()
+    - Statevector.from_instruction(circuit) for statevector extraction
+    - Operator(circuit) for unitary extraction
+    - .equiv() methods for quantum object comparison
+    - generate_preset_pass_manager() NOT transpile()
+    - Import from qiskit_aer, NOT qiskit.providers.aer
+    - Use StatevectorSampler, StatevectorEstimator from qiskit.primitives
+
+    DEPRECATED APIs (DO NOT USE):
+    - bind_parameters() → use assign_parameters()
+    - transpile() → use generate_preset_pass_manager().run()
+    - execute() → use primitives (Sampler/Estimator)
+    - Qubit.index → use circuit.find_bit(qubit)
+    - qiskit.primitives.Estimator → use StatevectorEstimator
+    - qiskit.primitives.Sampler → use StatevectorSampler
+
+    REQUIREMENTS:
+    - Questions must be self-contained with all necessary information
+    - DO NOT reference "the context" or "the provided code" in question text
+    - Be direct and objective
+    - Base everything on the provided context
+
+  test_generation_prompt: |
+    Create a Qiskit HumanEval style unit test for this question.
+
+    Question: {question}
+    Entry point: {entry_point}
+
+    CRITICAL QISKIT 2.0 TEST PATTERNS:
+    - Use assign_parameters() NOT bind_parameters()
+    - For parametrized circuits, ALWAYS bind parameters before Operator(): 
+      `bound = circuit.assign_parameters({{param: value}}); Operator(bound)`
+    - Use Statevector.equiv() and Operator.equiv() for quantum object comparisons
+    - Use circuit.find_bit(qubit) NOT qubit.index
+    - Use numpy.allclose() for numerical comparisons
+    - For measurement results, check distribution patterns, not exact counts
+
+    QISKIT HUMANEVAL TEST EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit (from Qiskit HumanEval/0):
+    ```python
+    from qiskit import QuantumCircuit
+    def check(candidate):
+        result = candidate(3)
+        assert isinstance(result, QuantumCircuit)
+        assert result.num_qubits == 3
+    check(create_quantum_circuit)
+    ```
+
+    EXAMPLE 2 - Statevector comparison (from Qiskit HumanEval/2):
+    ```python
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+    def check(candidate):
+        result = candidate()
+        solution = (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+        assert result.equiv(solution)
+    check(create_bell_statevector)
+    ```
+
+    EXAMPLE 3 - Operator/circuit comparison (from Qiskit HumanEval/4):
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.quantum_info import Operator
+    def check(candidate):
+        matrix = [[0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0]]
+        solution = QuantumCircuit(2)
+        solution.unitary(matrix, [0, 1])
+        assert Operator(solution).equiv(Operator(candidate()))
+    check(create_unitary_from_matrix)
+    ```
+
+    EXAMPLE 4 - Parametrized circuit:
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.circuit import Parameter
+    from qiskit.quantum_info import Operator
+    import math
+    def check(candidate):
+        circuit = candidate()
+        assert circuit.num_qubits == 1
+        assert circuit.data[0].operation.name == "rx"
+        assert circuit.data[0].operation.params[0].name == "theta"
+        bound = circuit.assign_parameters({{circuit.parameters[0]: math.pi * 3 / 4}})
+        solution_circuit = QuantumCircuit(1)
+        solution_circuit.rx(math.pi * 3 / 4, 0)
+        assert Operator(solution_circuit).equiv(Operator(bound))
+    check(rx_gate)
+    ```
+
+    EXAMPLE 5 - Measurement counts:
+    ```python
+    def check(candidate):
+        result = candidate()
+        assert isinstance(result, dict)
+        assert result.keys() == {{"00", "11"}}
+        assert 0.4 < (result["00"] / sum(result.values())) < 0.6
+    check(run_bell_state_simulator)
+    ```
+
+    EXAMPLE 6 - GHZ state with optional return:
+    ```python
+    from qiskit.quantum_info import Statevector
+    import math
+    import matplotlib
+    def check(candidate):
+        def check_circuit(circuit):
+            assert circuit.data[-1].operation.name == "measure"
+            circuit.remove_final_measurements()
+            ghz_statevector = (
+                Statevector.from_label("000") + Statevector.from_label("111")
+            ) / math.sqrt(2)
+            assert Statevector.from_instruction(circuit).equiv(ghz_statevector)
+        circuit = candidate()
+        check_circuit(circuit)
+        circuit, drawing = candidate(drawing=True)
+        check_circuit(circuit)
+        assert isinstance(drawing, matplotlib.figure.Figure)
+    check(create_ghz)
+    ```
+
+    REQUIREMENTS:
+    - Include ALL imports at top
+    - Use check(candidate) pattern exactly
+    - Call check({entry_point}) at the end (function name, not string)
+    - For parametrized circuits: ALWAYS bind parameters before Operator()
+    - Use .equiv() for quantum objects (Statevector, Operator)
+    - Use isinstance() for type checks
+    - For measurements: check distribution patterns, not exact counts
+    - NO comments in code
+    - Tests must be deterministic and reproducible
+
+    Return ONLY a single Python code block with the complete test.
+
+  # =============================================================================
+  # ANSWER GENERATION SESSION PROMPTS
+  # =============================================================================
 
   answer_generation_system: |
     Reasoning: high.
     You are a Qiskit quantum computing expert providing reference solutions.
-    Generate correct, executable code that passes the unit test.
+    Your mission is to help create high-quality Qiskit code grounded in the provided context.
 
-    Code requirements:
-    - Include ALL necessary imports at the beginning
-    - Code must be complete, concise, and executable
-    - NO comments in code
-    - NO emojis or conversational text
-    - Use only Qiskit framework
-    - Follow the exact function signature if specified
+    CRITICAL: USE CONTEXT AS PRIMARY SOURCE
+    - The context contains document text, code examples, and image transcriptions
+    - Use code patterns and implementations directly from the context when possible
+    - DO NOT invent new implementations - base your solution on context examples
+    - If context shows working Qiskit code, adapt it to the task requirements
+    - The entire document was extracted from Qiskit's open-source sources - using their code directly is best
+    - Ensure code matches Qiskit 2.0 best practices shown in context
 
-    Answer requirements:
-    - Give ONE direct solution without alternatives
-    - DO NOT reference "the code above", "this example"
-    - DO NOT add tips, hints, or extra commentary
-    - DO NOT include URLs or links
+    SESSION FLOW:
+    1. Generate a solution based on context
+    2. If validation fails, you receive the error and correct your solution
+    3. Continue until the solution passes
 
-  test_generation_system: |
-    Reasoning: high.
-    You are an expert at writing unit tests for Qiskit quantum computing code.
-    Generate pytest-compatible tests that verify functional correctness.
+    QISKIT 2.0 BEST PRACTICES:
+    The current version of "qiskit" is "2.0". Ensure your code is valid Python and Qiskit.
+    The official documentation is available at "https://quantum.cloud.ibm.com/docs/en".
 
-    Requirements:
-    - Use pytest with standard assertions
-    - Include ALL necessary imports
-    - Use Qiskit's comparison utilities:
-      - Operator.equiv() for circuit/operator comparison
-      - Statevector.equiv() for state comparison
-      - numpy.allclose() for numerical comparisons
-    - NO comments in test code
-    - Tests must be deterministic and reproducible
-    - For circuits with measurements, check counts distribution patterns
-    - Test must verify the FUNCTION behavior, not implementation details
+    CODE REQUIREMENTS:
+    - Complete, concise, executable code
+    - NO comments, NO emojis, NO conversational text
+    - Follow exact function signature if specified
+    - Use proper indentation (4 spaces per level)
+    - Include ALL necessary imports (for code_generation type)
+    - For function_completion: return ONLY the function body (indented, no imports/signature)
 
-  # === QUESTION TYPE PROMPTS ===
+  function_completion_answer_prompt: |
+    Complete the function body for this stub. Return ONLY the body code (the lines that replace 'pass').
 
-  function_completion_prompt: |
-    Based on the provided context, create a function completion task in Qiskit HumanEval format.
+    Function Stub (includes imports, signature, docstring):
+    {question}
 
-    Context:
-    {context}
-
-    Generate a task with:
-    1. A function signature with type hints
-    2. A docstring explaining what the function should do
-    3. Necessary imports if critical
-
-    Format your response as:
-    ```python
-    from qiskit import QuantumCircuit
-    # other imports as needed
-
-    def function_name(param1: Type1, param2: Type2) -> ReturnType:
-        """
-        Brief description of what the function should do.
-        
-        Args:
-            param1: Description
-            param2: Description
-            
-        Returns:
-            Description of return value
-        """
-        pass
-    ```
-
-    Requirements:
-    - Function must be testable (returns a value or modifiable object)
-    - Task should be specific and well-defined
-    - Based on actual patterns from the context
-    - NO implementation, only signature and docstring
-
-  code_generation_prompt: |
-    Based on the provided context, create a code generation task (Qiskit HumanEval Hard format).
-
-    Context:
-    {context}
-
-    Generate a direct, actionable task description that:
-    - Requires complete code implementation
-    - Is specific about what needs to be implemented
-    - Can be 1-2 sentences maximum
-    - Specifies the function name and arguments at the end
-
-    Format: [Task description]. You must implement this using a function named `function_name` with the following arguments: arg1, arg2.
-
-    Examples:
-    - "Create a 3-qubit GHZ state circuit and return it. You must implement this using a function named `create_ghz` with no arguments."
-    - "Return a phi+ Bell statevector. You must implement this using a function named `create_bell_statevector` with no arguments."
-    - "Generate a QuantumCircuit with n qubits and apply Hadamard gates to all. You must implement this using a function named `create_superposition` with the following arguments: n_qubits."
-
-    Return ONLY the task description.
-
-  qa_prompt: |
-    Based on the provided context, generate a question focused on quantum computing concepts, theory, or explanation.
-
-    Context:
-    {context}
-
-    This is for QA (theory/concepts), NOT code generation. Focus on:
-    - Conceptual understanding (superposition, entanglement, measurement)
-    - Theoretical explanations (algorithms, protocols, principles)
-    - Visual interpretation (if image: analyze circuits, diagrams, results)
-    - Analysis (what happens when, why does, how does)
-
-    For multimodal QA (with image):
-    - Ask for interpretation, explanation, or analysis of visual content
-    - Reference specific visual elements that need explanation
-    - Make the image essential for answering
-
-    Requirements:
-    - Keep it direct and objective (1-2 sentences)
-    - DO NOT ask for code implementation
-    - Make it self-contained
-
-    Return ONLY the question text.
-
-  # === ANSWER GENERATION PROMPTS ===
-
-  answer_with_test_prompt: |
-    Generate a reference solution that passes the unit test.
-
-    Task: {question}
-
-    Unit Test (your code MUST pass this):
+    Unit Test:
     ```python
     {test_code}
     ```
 
+    Context (use code patterns from here):
+    {context}
+
+    CRITICAL REQUIREMENTS:
+    - Return ONLY the function body lines that replace 'pass'
+    - Do NOT include imports (they're in the stub)
+    - Do NOT include function signature or docstring
+    - Use proper indentation (4 spaces - same as the 'pass' statement)
+    - Base your implementation on code patterns from the context
+    - Use Qiskit 2.0 APIs: assign_parameters(), Statevector.from_instruction(), Operator(), etc.
+
+    QISKIT HUMANEVAL FORMAT EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit (from Qiskit HumanEval):
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_quantum_circuit(n_qubits):
+        """ Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        return QuantumCircuit(n_qubits)
+
+    EXAMPLE 2 - Bell statevector (from Qiskit HumanEval):
+    Stub:
+    ```python
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+    def create_bell_statevector() -> Statevector:
+        """ Return a phi+ Bell statevector.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        return (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+
+    EXAMPLE 3 - GHZ circuit (from Qiskit HumanEval):
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_ghz(drawing=False):
+        """ Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit object and the Matplotlib drawing.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        ghz = QuantumCircuit(3)
+        ghz.h(0)
+        ghz.cx(0, 1)
+        ghz.cx(0, 2)
+        ghz.measure_all()
+        if drawing:
+            return ghz, ghz.draw(output="mpl")
+        return ghz
+
+    EXAMPLE 4 - Parametrized gate (from Qiskit HumanEval):
+    Stub:
+    ```python
+    from qiskit.circuit import QuantumCircuit, Parameter
+    def create_parametrized_gate():
+        """ Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter "theta".
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        theta = Parameter("theta")
+        quantum_circuit = QuantumCircuit(1)
+        quantum_circuit.rx(theta, 0)
+        return quantum_circuit
+
+    EXAMPLE 5 - Unitary from matrix (from Qiskit HumanEval):
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_unitary_from_matrix():
+        """ Write the function that converts the matrix [[0, 0, 0, 1],[0, 0, 1, 0],[1, 0, 0, 0],[0, 1, 0, 0]] into a unitary gate and apply it to a Quantum Circuit. Then return the circuit.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        matrix = [[0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0]]
+        circuit = QuantumCircuit(2)
+        circuit.unitary(matrix, [0, 1])
+        return circuit
+
+    INDENTATION RULES (CRITICAL):
+    - The 'pass' statement in the stub shows the correct indentation level (typically 4 spaces)
+    - All body lines must be indented at the SAME level as 'pass' (4 spaces)
+    - Nested statements (if, for, etc.) should be indented 4 more spaces (8 spaces total)
+    - Do NOT include the function signature line
+    - Do NOT include blank lines before the first statement
+    - Do NOT add extra indentation - match the 'pass' indentation exactly
+    - If the stub shows '    pass' (4 spaces), your body lines should start with 4 spaces
+
+    EXAMPLE - Proper indentation:
+    Stub has: `    pass` (4 spaces before 'pass')
+    Your answer should be:
+        return QuantumCircuit(n_qubits)
+    (4 spaces before 'return')
+
+    Return ONLY the function body lines (properly indented to match 'pass'), no markdown code blocks, no explanations, no leading/trailing blank lines.
+
+  code_generation_answer_prompt: |
+    Generate complete code that implements the task. Base your solution on code patterns from the context.
+
+    Task:
+    {question}
+
+    Unit Test:
+    ```python
+    {test_code}
+    ```
+
+    Context (use code patterns from here):
+    {context}
+
+    CRITICAL REQUIREMENTS:
+    - Return COMPLETE code with ALL imports and the function definition
+    - Base implementation on code examples from the context
+    - Use Qiskit 2.0 APIs: assign_parameters(), generate_preset_pass_manager(), StatevectorSampler, etc.
+    - Use proper indentation (4 spaces per level)
+    - NO comments, NO explanations, NO markdown code blocks
+    - Code must pass the provided unit test
+
+    QISKIT HUMANEVAL HARD FORMAT EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit:
+    Task: "Generate a Quantum Circuit for the given int 'n_qubits' and return it. You must implement this using a function named `create_quantum_circuit` with the following arguments: n_qubits."
+    Answer:
+    from qiskit import QuantumCircuit
+
+    def create_quantum_circuit(n_qubits):
+        return QuantumCircuit(n_qubits)
+
+    EXAMPLE 2 - Bell statevector:
+    Task: "Return a phi+ Bell statevector. You must implement this using a function named `create_bell_statevector` with no arguments."
+    Answer:
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+
+    def create_bell_statevector():
+        return (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+
+    EXAMPLE 3 - GHZ circuit with measurement:
+    Task: "Define a phi plus bell state using Qiskit, transpile the circuit using pass manager with optimization level as 1, run it using Qiskit Sampler with the Aer simulator as backend and return the counts dictionary. You must implement this using a function named `run_bell_state_simulator` with no arguments."
+    Answer:
+    from qiskit import QuantumCircuit
+    from qiskit_aer import AerSimulator
+    from qiskit_ibm_runtime import Sampler
+    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+
+    def run_bell_state_simulator():
+        bell = QuantumCircuit(2)
+        bell.h(0)
+        bell.cx(0, 1)
+        bell.measure_all()
+        backend = AerSimulator()
+        pass_manager = generate_preset_pass_manager(optimization_level=1, backend=backend)
+        isa_circuit = pass_manager.run(bell)
+        sampler = Sampler(mode=backend)
+        result = sampler.run([isa_circuit], shots=1000).result()
+        return result[0].data.meas.get_counts()
+
+    EXAMPLE 4 - Parametrized circuit:
+    Task: "Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter 'theta'. You must implement this using a function named `create_parametrized_gate` with no arguments."
+    Answer:
+    from qiskit.circuit import QuantumCircuit, Parameter
+
+    def create_parametrized_gate():
+        theta = Parameter("theta")
+        quantum_circuit = QuantumCircuit(1)
+        quantum_circuit.rx(theta, 0)
+        return quantum_circuit
+
+    EXAMPLE 5 - Unitary from matrix:
+    Task: "Convert the matrix [[0,0,0,1],[0,0,1,0],[1,0,0,0],[0,1,0,0]] into a unitary gate and apply it to a 2-qubit QuantumCircuit. You must implement this using a function named `create_unitary_from_matrix` with no arguments."
+    Answer:
+    from qiskit import QuantumCircuit
+
+    def create_unitary_from_matrix():
+        matrix = [[0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0]]
+        circuit = QuantumCircuit(2)
+        circuit.unitary(matrix, [0, 1])
+        return circuit
+
+    IMPORTANT:
+    - Include ALL necessary imports at the top
+    - Function signature must match the task specification exactly
+    - Use code patterns from context when available
+    - Ensure code is executable and passes the test
+
+    Return ONLY Python code (no markdown, no explanations).
+
+  qa_answer_prompt: |
+    Answer the question about quantum computing concepts.
+
+    Question:
+    {question}
+
     Context:
     {context}
 
-    Requirements:
-    - Include ALL necessary imports
-    - Implement the EXACT function signature expected by the test
-    - Code must be complete and executable
+    REQUIREMENTS:
+    - Be clear, accurate, based on context
+    - Code examples must use Qiskit 2.0 APIs
     - NO comments in code
-    - Return ONLY the Python code in a single code block
-
-  answer_without_test_prompt: |
-    Answer the following question about quantum computing.
-
-    Question: {question}
-
-    Context:
-    {context}
-
-    Requirements:
-    - Be clear, accurate, and based on the provided context
-    - If including code, ensure it is complete and executable
-    - NO comments in code snippets
     - Be concise and direct
 
-  # === QUALITY CONTROL PROMPTS ===
+  answer_correction_prompt: |
+    Your previous answer has a {error_type} error:
+
+    {error_message}
+
+    Fix your answer. Return ONLY the corrected code.
+
+    COMMON FIXES:
+    - IndentationError: Check indentation is consistent (4 spaces per level). For function_completion, body lines must match the 'pass' indentation level exactly.
+    - bind_parameters: Use assign_parameters() instead
+    - Qubit.index: Use circuit.find_bit(qubit) instead
+    - Parameter unbound error: Bind parameters before using Operator() - use circuit.assign_parameters({{param: value}}) first
+    - ImportError: Include ALL necessary imports at the top (for code_generation type)
+    - Missing imports: Check if you need to import Parameter from qiskit.circuit, not qiskit
+    - CircuitError: Check qubit indices are within circuit bounds
+    - AssertionError: Verify your implementation matches the test expectations
+
+    FOR FUNCTION_COMPLETION:
+    - Return ONLY the function body (indented 4 spaces, matching 'pass' level)
+    - Do NOT include imports or function signature
+    - Ensure proper indentation for nested statements
+
+    FOR CODE_GENERATION:
+    - Include ALL imports at the top
+    - Include complete function definition
+    - Ensure code is executable and passes the test
+
+  # =============================================================================
+  # QUESTION TYPE PROMPTS
+  # =============================================================================
+
+  function_completion_prompt: |
+    Create a function completion task in Qiskit HumanEval format based EXCLUSIVELY on the context.
+
+    Context:
+    {context}
+
+    CRITICAL: Base the task on code patterns, examples, and concepts from the context.
+    - Extract function patterns from context code
+    - Use similar function signatures and logic from context
+    - Adapt context examples to create the stub
+    - DO NOT invent new functionality not present in context
+
+    FORMAT: A function stub with imports, signature, docstring, and `pass`.
+    This matches the Qiskit HumanEval dataset format exactly.
+
+    QISKIT HUMANEVAL EXAMPLES (use these as templates):
+
+    EXAMPLE 1 - Basic circuit (from Qiskit HumanEval/0):
+    ```python
+    from qiskit import QuantumCircuit
+    def create_quantum_circuit(n_qubits):
+        """ Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+        """
+        pass
+    ```
+
+    EXAMPLE 2 - Statevector (from Qiskit HumanEval/2):
+    ```python
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+    def create_bell_statevector() -> Statevector:
+        """ Return a phi+ Bell statevector.
+        """
+        pass
+    ```
+
+    EXAMPLE 3 - GHZ state (from Qiskit HumanEval/3):
+    ```python
+    from qiskit import QuantumCircuit
+    def create_ghz(drawing=False):
+        """ Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit object and the Matplotlib drawing of the circuit, otherwise return just the circuit object.
+        """
+        pass
+    ```
+
+    EXAMPLE 4 - Parametrized gate (from Qiskit HumanEval/7):
+    ```python
+    from qiskit.circuit import QuantumCircuit, Parameter
+    def create_parametrized_gate():
+        """ Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter "theta".
+        """
+        pass
+    ```
+
+    EXAMPLE 5 - Unitary from matrix (from Qiskit HumanEval/4):
+    ```python
+    from qiskit import QuantumCircuit
+    def create_unitary_from_matrix():
+        """ Write the function that converts the matrix [[0, 0, 0, 1],[0, 0, 1, 0],[1, 0, 0, 0],[0, 1, 0, 0]] into a unitary gate and apply it to a Quantum Circuit. Then return the circuit.
+        """
+        pass
+    ```
+
+    EXAMPLE 6 - With transpilation (from Qiskit HumanEval/1):
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit_aer import AerSimulator
+    from qiskit_ibm_runtime import Sampler
+    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+    def run_bell_state_simulator():
+        """ Define a phi plus bell state using Qiskit, transpile the circuit using pass manager with optimization level as 1, run it using Qiskit Sampler with the Aer simulator as backend and return the counts dictionary.
+        """
+        pass
+    ```
+
+    REQUIREMENTS:
+    - Include ALL necessary imports at the top
+    - Brief docstring (1-3 lines) describing the task clearly
+    - Function signature with proper type hints if applicable
+    - End with `pass` statement only (indented 4 spaces)
+    - Function name in snake_case
+    - Base on code patterns from context
+    - Use Qiskit 2.0 APIs in docstring descriptions
+
+    Return ONLY the Python code block (no markdown explanation).
+
+  code_generation_prompt: |
+    Create a code generation task in Qiskit HumanEval Hard format based EXCLUSIVELY on the context.
+
+    Context:
+    {context}
+
+    CRITICAL: Base the task on code patterns, examples, and concepts from the context.
+    - Extract implementation patterns from context code
+    - Use similar function signatures and logic from context
+    - Adapt context examples to create the task
+    - DO NOT invent new functionality not present in context
+
+    FORMAT: Natural language task + function specification.
+    Pattern: [Task in 1-2 sentences] You must implement this using a function named `name` with [no arguments / the following arguments: ...].
+
+    QISKIT HUMANEVAL HARD EXAMPLES (use these as templates):
+
+    EXAMPLE 1 - Basic circuit:
+    "Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+    You must implement this using a function named `create_quantum_circuit` with the following arguments: n_qubits."
+
+    EXAMPLE 2 - Statevector:
+    "Return a phi+ Bell statevector.
+    You must implement this using a function named `create_bell_statevector` with no arguments."
+
+    EXAMPLE 3 - GHZ with optional return:
+    "Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit object and the Matplotlib drawing of the circuit, otherwise return just the circuit object.
+    You must implement this using a function named `create_ghz` with the following arguments: drawing."
+
+    EXAMPLE 4 - Parametrized gate:
+    "Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter 'theta'.
+    You must implement this using a function named `create_parametrized_gate` with no arguments."
+
+    EXAMPLE 5 - Unitary from matrix:
+    "Write the function that converts the matrix [[0, 0, 0, 1],[0, 0, 1, 0],[1, 0, 0, 0],[0, 1, 0, 0]] into a unitary gate and apply it to a Quantum Circuit. Then return the circuit.
+    You must implement this using a function named `create_unitary_from_matrix` with no arguments."
+
+    EXAMPLE 6 - With transpilation and execution:
+    "Define a phi plus bell state using Qiskit, transpile the circuit using pass manager with optimization level as 1, run it using Qiskit Sampler with the Aer simulator as backend and return the counts dictionary.
+    You must implement this using a function named `run_bell_state_simulator` with no arguments."
+
+    EXAMPLE 7 - State preparation:
+    "Return a QuantumCircuit that prepares the binary state 1.
+    You must implement this using a function named `create_state_prep` with no arguments."
+
+    REQUIREMENTS:
+    - 1-2 sentences task description (clear and specific)
+    - ALWAYS end with function specification in exact format shown
+    - snake_case function name
+    - Base on code patterns from context
+    - Use Qiskit 2.0 terminology in task description
+
+    Return ONLY the task description text (no code blocks, no markdown).
+
+  qa_prompt: |
+    Create a question about quantum computing concepts/theory based on the context.
+
+    Context:
+    {context}
+
+    This is for QA (theory/concepts), NOT code generation.
+
+    FOCUS ON:
+    - Conceptual understanding (superposition, entanglement, measurement)
+    - Theoretical explanations (algorithms, protocols)
+    - Visual interpretation (analyze circuits, diagrams, results)
+    - Summarization of key concepts
+
+    EXAMPLES:
+    - "What quantum state does this circuit prepare and why?"
+    - "Explain the role of the Hadamard gate in creating superposition."
+    - "What is the significance of the measurement results shown in the histogram?"
+    - "How does the VQE algorithm minimize the energy expectation value?"
+
+    REQUIREMENTS:
+    - Keep it direct (1-3 sentences)
+    - DO NOT ask for code implementation
+    - Self-contained and answerable from context
+
+    Return ONLY the question text.
+
+  # =============================================================================
+  # QUALITY CONTROL PROMPTS
+  # =============================================================================
 
   content_filter_system: |
     Reasoning: high.
@@ -270,8 +693,16 @@ prompts:
     REASON: Brief explanation (one sentence)
 
   content_quality_check: |
-    Can this content be used to generate a training sample about quantum computing, circuits, physics, mathematics, or code?
-    (Not bibliography, logos, noise, or random data without interpretability)
+    Can this content be used to generate a Qiskit coding task or a specific quantum theory question?
+
+    REJECT if:
+    - It is generic Python code (lists, loops) without Qiskit, mathematical, or quantum logic.
+    - It is bibliography, references, or copyright text.
+    - It is too short or fragmented to be useful.
+    - It is a homework solution without context (e.g. just "return '11100'").
+
+    PASS if:
+    - It involves something about mathematics, quantum computing, Qiskit, or code and its not trivial, vague, or generic.
 
     {content}
 
@@ -298,62 +729,123 @@ prompts:
 
   image_transcription_system: |
     You are an expert in quantum computing, physics, and mathematics.
-    Provide a detailed, objective technical description of the image.
+    Provide a detailed, objective transcription of the image about quantum computing and qiskit.
+
+    Requirements:
+    - Be extremely detailed and precise.
+    - Dont provide any explanation about concepts. Any code.
+    - Use LaTeX formatting for math formulas.
+    - Describe circuit connections, gates, and qubits explicitly.
+    - Describes charts, graphs, and tables explicitly.
+    - Ignore UI elements, window borders, or irrelevant background.
+    - Focus on the technical content.
 
     For quantum circuits:
-    - Identify each qubit line (q_0, q_1, etc.)
-    - List each gate type, position, and target qubit(s)
-    - Specify rotation angles for parameterized gates
-    - Describe CNOT/controlled gates connections
+    - Describe the circuit definition with all qubits, gates, and measurements in an orderly and organized way. In layers from left to right, describe each operation that is applied to a qubit. Specify if the gate have some parameter
+
+    For Bloch spheres:
+    - Describe the position of each vector precisely (which axis or plane)
+    - State which pure state or superposition each vector represents
+    - Note any labels or annotations on the sphere
 
     For charts/histograms:
     - Describe axis labels, units, and ranges
     - Identify key data points and values
+    - Note patterns in measurement results
 
     For diagrams/formulas:
     - Transcribe formulas using LaTeX notation
     - Describe structure and connections
+    - Identify quantum states and operations
 
   image_transcription: |
-    Provide a detailed technical description of this image related to quantum computing, mathematics, or physics.
+    Provide a detailed, objective transcription of this image related to quantum computing, qiskit, physics, mathematics, or code. Dont provide any explanation about concepts. Any code.
+    If the image is not related to quantum computing, Qiskit, physics, mathematics, or code, describe in simple terms what it is.
+    The idea is that it should be possible to understand the image without looking at it.
 
-  # === CLASSIFICATION AND CURATION ===
+  # =============================================================================
+  # CANDIDATE FILTERING
+  # =============================================================================
+
+  candidate_filter_system: |
+    Reasoning: high.
+    You are a quality filter for generated input candidates.
+    Evaluate if the candidate is suitable for training data generation.
+
+    Respond in this format:
+    DECISION: PASS/REJECT
+    REASON: Brief explanation (one sentence)
+
+  candidate_filter_prompt: |
+    Evaluate this input candidate:
+
+    Question Type: {question_type}
+    Has Image: {has_image}
+    Has Test: {has_test}
+
+    Question:
+    {question}
+
+    Context Preview:
+    {context_preview}
+
+    REJECT if:
+    - The question is trivial or generic Python (not quantum-specific)
+    - The question doesn't match the question type format
+    - For multimodal: the question doesn't reference visual elements
+    - The question is too vague or cannot be verified
+
+    DECISION: PASS/REJECT
+    REASON: Brief explanation
+
+  # =============================================================================
+  # CLASSIFICATION AND CURATION
+  # =============================================================================
 
   category_classification_system: |
     Reasoning: high.
-    You are a content classifier. Classify content into ONE of the following categories:
+    You are a content classifier. Classify the sample into ONE of the following categories based on its question and answer content:
 
     {categories}
 
-    Return ONLY the category name.
+    Return ONLY the category name (e.g., "circuits_and_gates").
 
   category_classification: |
-    Content: {content}
+    Question Type: {question_type}
+
+    Question:
+    {question}
+
+    Answer:
+    {answer}
+
+    Return ONLY the category name.
 
   sample_curation_system: |
     Reasoning: high.
-    You are a quality control expert for quantum computing training data.
-    Evaluate if samples meet high standards for fine-tuning language models.
+    You are a quality control expert for quantum computing VLM training data.
+    Evaluate if samples meet high standards for fine-tuning vision-language models.
 
-    CORRECTNESS CHECKS:
-    1. Answer invents information not in quantum computing facts
-    2. Answer uses non-Qiskit frameworks
-    3. Answer is incomplete or truncated
-    4. Answer doesn't address the question
-    5. Context leakage (references "the provided code", "the image above")
-    6. Factual errors in physics, math, or implementation
-
+    CONTENT CORRECTNESS:
+    - Answer invents information not in quantum computing facts
+    - Answer is incomplete or truncated
+    - Answer doesn't address the question
+    - Factual errors in physics, math, or implementation
 
     MULTIMODAL CHECKS (if has image):
-    11. Image is essential to the task, not decorative
-    12. Task references specific visual elements
-    13. Answer correctly interprets visual information
+    - Image is essential to the task, not decorative
+    - Task references specific visual elements
+    - Answer correctly interprets visual information
 
     FORMATTING:
-    14. No excessive repetition
-    15. No inappropriate language
-    16. No URLs or links
-    17. No pleasantries ("Happy coding!", etc.)
+    - No excessive repetition
+    - No inappropriate language
+    - No URLs or links
+    - No pleasantries ("Happy coding!", etc.)
+
+    QUALITY CHECK:
+    - Is this a trivial Python task (e.g. list sorting, string matching) without Qiskit, mathematical, or quantum logic? If so, REJECT.
+    - The question is valid and related to the topic, not generic or vague.
 
     Respond:
     DECISION: PASS/REJECT
@@ -374,21 +866,22 @@ prompts:
     REASON: Brief explanation
 
 generation:
-  target_samples: 50
+  target_samples: 15
 
   question_model: question-model
   vision_model: vision-model
   answer_model: answer-model
   curate_model: curate-model
   filter_model: curate-model
-  classify_model: curate-model
 
   llm_batch_size: 32
   llm_concurrency: 10
   vlm_batch_size: 32
   vlm_concurrency: 10
 
-  multimodal_ratio: 0.5
+  # Input planning
+  candidates_per_chunk: 4
+  enable_candidate_filtering: true
 
   question_types:
     - function_completion
@@ -396,11 +889,13 @@ generation:
     - qa
 
   question_type_weights:
-    function_completion: 1.0
-    code_generation: 1.0
-    qa: 1.0
+    function_completion: 0.45
+    code_generation: 0.45
+    qa: 0.1
 
-  max_context_length: 3200
+  multimodal_ratio: 0.5
+
+  max_context_length: 4864
   chunk_overlap: 0
 
   enable_image_transcription: true
@@ -410,9 +905,9 @@ generation:
   similarity_threshold: 0.85
 
   enable_code_verification: true
-  code_verification_max_iterations: 3
+  code_verification_max_iterations: 7
   code_verification_timeout: 60
-  code_verification_concurrency: 5
+  code_verification_concurrency: 10
 
   test_validation_timeout: 60
 
@@ -422,7 +917,7 @@ dataset:
     High-quality multimodal dataset for quantum computing with Qiskit.
     Three input types: function_completion, code_generation, qa.
     Code samples include unit tests for verification.
-    Balanced distribution across 14 categories.
+    Balanced distribution across 7 categories.
 
   parsed_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/parsed
   generated_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/generated

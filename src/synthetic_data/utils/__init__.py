@@ -2,26 +2,22 @@
 
 from .cache import PipelineCache
 from .checkpoint import BatchCheckpointProcessor, CheckpointManager
-from .code_verifier import CodeVerifier, CodeVerificationResult
 from .deduplication import Deduplicator
 from .function_extractor import FunctionExtractor, FunctionInfo
 from .image_resolver import ImageResolver
 from .quality import QualityFilter
-from .test_generator import TestGenerator, TestResult, GeneratedTest, CodeWithTestValidator
+from .tracer import GenerationTracer, ConversationTrace, TraceEntry
 
 __all__ = [
     "BatchCheckpointProcessor",
     "CheckpointManager",
-    "CodeVerifier",
-    "CodeVerificationResult",
-    "CodeWithTestValidator",
+    "ConversationTrace",
     "Deduplicator",
     "FunctionExtractor",
     "FunctionInfo",
-    "GeneratedTest",
+    "GenerationTracer",
     "ImageResolver",
     "PipelineCache",
     "QualityFilter",
-    "TestGenerator",
-    "TestResult",
+    "TraceEntry",
 ]

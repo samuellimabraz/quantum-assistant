@@ -15,7 +15,7 @@ class HuggingFaceExporter:
     Exports samples with the following structure:
     - question: The input prompt/question
     - answer: The reference solution/answer
-    - category: One of 14 quantum computing categories
+    - category: One of 7 quantum computing categories
     - type: function_completion, code_generation, or qa
     - test_code: Unit test for code types (null for qa)
     - entry_point: Function name for code types (null for qa)
@@ -347,21 +347,14 @@ func_completion = dataset["train"].filter(lambda x: x["type"] == "function_compl
 
 ## Categories
 
-14 quantum computing categories:
-- quantum_fundamentals
-- quantum_states_entanglement
-- quantum_gates_circuits
-- quantum_algorithms
-- quantum_ml_optimization
-- quantum_simulation_hamiltonians
-- quantum_error_correction_noise
-- quantum_information_communication
-- variational_hybrid_approaches
-- quantum_thermodynamics
-- advanced_topological
-- frameworks_tooling
-- hardware_backends
-- education_meta
+7 quantum computing categories:
+- circuits_and_gates
+- algorithms_and_applications
+- transpilation_and_compilation
+- primitives_and_execution
+- noise_and_error_mitigation
+- quantum_info_and_operators
+- hardware_and_providers
 
 ## License
 

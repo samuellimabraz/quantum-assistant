@@ -1,5 +1,6 @@
 """PDF file parser using PyMuPDF."""
 
+import hashlib
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -15,12 +16,16 @@ class PDFParser(DocumentParser):
         return path.suffix.lower() == ".pdf"
 
     def parse(self, path: Path) -> Document:
-        """Parse PDF file and extract content."""
+        """Parse PDF file and extract content.
+
+        Images are replaced with [IMAGE:id] markers in the content.
+        """
         doc = fitz.open(str(path))
 
         try:
             title = self._extract_title(doc)
             content_parts = []
+            images = []
             page_count = len(doc)
 
             for page_num in range(page_count):
@@ -29,20 +34,32 @@ class PDFParser(DocumentParser):
                 text = page.get_text()
                 page_content = [text.strip()] if text.strip() else []
 
+                # Get context for images on this page
+                context_lines = text.split("\n")[:5]
+                context = " ".join(context_lines).strip()[:200]
+
                 image_list = page.get_images(full=True)
                 for img_index, _ in enumerate(image_list):
                     img_ref_path = f"pdf:{path.name}:page{page_num}:img{img_index}"
-                   
-                    page_content.append(
-                        f"\n![Figure {page_num + 1}.{img_index + 1}]({img_ref_path})\n"
+                    img_id = self._generate_image_id(img_ref_path, path)
+
+                    # Add image reference
+                    images.append(
+                        ImageReference(
+                            path=img_ref_path,
+                            alt_text=f"Figure {page_num + 1}.{img_index + 1}",
+                            context=context or f"Image on page {page_num + 1}",
+                            image_id=img_id,
+                        )
                     )
+
+                    # Add marker to content
+                    page_content.append(f"\n[IMAGE:{img_id}]\n")
 
                 if page_content:
                     content_parts.append("\n".join(page_content))
 
             content = "\n\n".join(content_parts)
-
-            images = self._create_image_references(doc, path)
 
             metadata = {
                 "page_count": page_count,
@@ -78,33 +95,8 @@ class PDFParser(DocumentParser):
 
         return ""
 
-    def _create_image_references(
-        self, doc: fitz.Document, source_path: Path
-    ) -> list[ImageReference]:
-        """Create image references for PDF images."""
-        images = []
-
-        try:
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                image_list = page.get_images(full=True)
-
-                page_text = page.get_text()
-                context_lines = page_text.split("\n")[:5]
-                context = " ".join(context_lines).strip()[:200]
-
-                for img_index, _ in enumerate(image_list):
-                    # Create a reference path that will be used for extraction
-                    img_ref_path = f"pdf:{source_path.name}:page{page_num}:img{img_index}"
-
-                    images.append(
-                        ImageReference(
-                            path=img_ref_path,
-                            alt_text=f"Figure {page_num + 1}.{img_index + 1}",
-                            context=context or f"Image on page {page_num + 1}",
-                        )
-                    )
-        except Exception as e:
-            print(f"Warning: Error creating image references from PDF: {e}")
-
-        return images
+    def _generate_image_id(self, img_ref_path: str, source_path: Path) -> str:
+        """Generate unique image ID."""
+        unique_str = f"{source_path.name}:{img_ref_path}"
+        hash_val = hashlib.md5(unique_str.encode()).hexdigest()[:12]
+        return f"img_{hash_val}"

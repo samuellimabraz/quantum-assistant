@@ -18,6 +18,7 @@ class QualityFilter:
             llm_client: LLM client for content and image quality checks
         """
         self.llm_client = llm_client
+        self._last_debug_info = []  # Store debug info for external access
 
     def _parse_filter_response(self, response: str) -> Tuple[bool, str]:
         """
@@ -214,6 +215,7 @@ class QualityFilter:
         """
         debug_info = []
         results = []
+        self._last_debug_info = []  # Reset for this batch
 
         content_system_content = (
             content_system_prompt
@@ -271,14 +273,19 @@ class QualityFilter:
 
                             # Save debug info
                             if save_debug and chunk_idx < len(chunks):
+                                chunk = chunks[chunk_idx]
                                 debug_info.append(
                                     {
                                         "type": "content",
-                                        "chunk_id": chunks[chunk_idx].chunk_id,
-                                        "source": str(chunks[chunk_idx].source_path),
+                                        "chunk_id": chunk.chunk_id,
+                                        "source": str(chunk.source_path),
                                         "decision": "PASS" if passed else "REJECT",
                                         "reason": reason,
-                                        "content_preview": chunks[chunk_idx].text[:200],
+                                        "content_preview": chunk.text[:200],
+                                        "has_images": len(chunk.images) > 0,
+                                        "image_ids": [
+                                            img.image_id for img in chunk.images if img.image_id
+                                        ],
                                         "full_response": response,
                                     }
                                 )
@@ -290,17 +297,31 @@ class QualityFilter:
             else:
                 content_results.extend([False] * len(batch))
 
-        unique_images = {}  # image_path -> (ImageReference, chunk_text)
+        unique_images = {}  # image_path -> (ImageReference, chunk_text, chunk_idx)
+        images_skipped_no_content_pass = 0
+        images_skipped_no_transcription = 0
+        images_skipped_no_resolved_path = 0
+
         for chunk_idx, chunk in enumerate(chunks):
-            if content_results[chunk_idx] and chunk.is_multimodal and chunk.images:
+            if not content_results[chunk_idx]:
+                # Content failed - count images that won't be evaluated
                 for img in chunk.images:
                     if img.transcription and img.resolved_path:
-                        if img.resolved_path not in unique_images:
+                        images_skipped_no_content_pass += 1
+                continue
 
-                            context_preview = (
-                                chunk.text[:500] if len(chunk.text) > 500 else chunk.text
-                            )
-                            unique_images[img.resolved_path] = (img, context_preview, chunk_idx)
+            if chunk.is_multimodal and chunk.images:
+                for img in chunk.images:
+                    if not img.transcription:
+                        images_skipped_no_transcription += 1
+                        continue
+                    if not img.resolved_path:
+                        images_skipped_no_resolved_path += 1
+                        continue
+
+                    if img.resolved_path not in unique_images:
+                        context_preview = chunk.text[:500] if len(chunk.text) > 500 else chunk.text
+                        unique_images[img.resolved_path] = (img, context_preview, chunk_idx)
 
         # Batch check all unique images
         image_results = {}  # image_path -> (passed, reason)
@@ -317,18 +338,25 @@ class QualityFilter:
             for img_path, (img, chunk_context, chunk_idx) in unique_images.items():
                 context_parts = []
                 if img.alt_text:
-                    context_parts.append(f"Alt text: {img.alt_text}")
+                    context_parts.append(f"Alt text: {img.alt_text[:200]}")
                 if img.caption:
-                    context_parts.append(f"Caption: {img.caption}")
+                    context_parts.append(f"Caption: {img.caption[:200]}")
                 if img.context:
-                    context_parts.append(f"Image context: {img.context}")
-                
+                    # Limit context to prevent API errors (some contexts are huge)
+                    context_limited = img.context[:500] if len(img.context) > 500 else img.context
+                    context_parts.append(f"Image context: {context_limited}")
+
                 context_parts.append(f"Surrounding text: {chunk_context}")
 
                 context = "\n".join(context_parts) if context_parts else "No additional context"
 
+                # Limit transcription to prevent API errors
+                transcription_limited = (
+                    img.transcription[:2000] if len(img.transcription) > 2000 else img.transcription
+                )
+
                 user_prompt = image_prompt.format(
-                    transcription=img.transcription,
+                    transcription=transcription_limited,
                     context=context,
                 )
 
@@ -343,13 +371,36 @@ class QualityFilter:
             try:
                 image_responses = await self.llm_client.generate_batch_async(
                     image_messages,
-                    max_tokens=1024,
+                    max_tokens=2048,
                     temperature=0.1,
                     max_concurrent=max_concurrent,
                 )
 
                 for idx, (img_path, img, chunk_idx) in enumerate(image_paths):
                     response = image_responses[idx]
+
+                    if response is None or (
+                        isinstance(response, str) and response.startswith("ERROR:")
+                    ):
+                        if save_debug:
+                            debug_info.append(
+                                {
+                                    "type": "image_error",
+                                    "chunk_id": chunks[chunk_idx].chunk_id,
+                                    "source": str(chunks[chunk_idx].source_path),
+                                    "image_id": img.image_id,
+                                    "image_path": img_path,
+                                    "error": "API request failed",
+                                    "transcription_length": (
+                                        len(img.transcription) if img.transcription else 0
+                                    ),
+                                    "context_length": len(img.context) if img.context else 0,
+                                }
+                            )
+
+                        image_results[img_path] = (True, "API error - defaulted to pass")
+                        continue
+
                     passed, reason = self._parse_filter_response(response)
                     image_results[img_path] = (passed, reason)
 
@@ -359,10 +410,16 @@ class QualityFilter:
                                 "type": "image",
                                 "chunk_id": chunks[chunk_idx].chunk_id,
                                 "source": str(chunks[chunk_idx].source_path),
+                                "image_id": img.image_id,
                                 "image_path": img_path,
+                                "resolved_path": img.resolved_path,
+                                "image_type": img.image_type.value if img.image_type else "unknown",
+                                "alt_text": img.alt_text,
                                 "decision": "PASS" if passed else "REJECT",
                                 "reason": reason,
-                                "transcription_preview": img.transcription[:200],
+                                "transcription_preview": (
+                                    img.transcription[:200] if img.transcription else None
+                                ),
                                 "full_response": response,
                             }
                         )
@@ -388,7 +445,7 @@ class QualityFilter:
                     metadata=chunk.metadata,
                     previous_chunk_text=chunk.previous_chunk_text,
                     next_chunk_text=chunk.next_chunk_text,
-                    all_document_code=chunk.all_document_code,
+                    accumulated_code=chunk.accumulated_code,
                 )
 
                 for img in chunk.images:
@@ -406,5 +463,19 @@ class QualityFilter:
 
             if (chunk_idx + 1) % batch_size == 0 and checkpoint_callback:
                 checkpoint_callback(results, debug_info)
+
+        # Add summary statistics to debug info
+        debug_info.append(
+            {
+                "type": "summary",
+                "images_evaluated": len(unique_images),
+                "images_skipped_no_content_pass": images_skipped_no_content_pass,
+                "images_skipped_no_transcription": images_skipped_no_transcription,
+                "images_skipped_no_resolved_path": images_skipped_no_resolved_path,
+            }
+        )
+
+        # Store debug info for external access
+        self._last_debug_info = debug_info
 
         return results, debug_info

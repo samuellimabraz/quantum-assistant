@@ -28,23 +28,38 @@ def test_vlm_with_images():
 
     # System and user prompts matching config.yaml
     system_prompt = """You are an expert in quantum computing, physics, and mathematics.
-Your task is to transcribe and describe images for a blind person who needs to understand the technical content.
-- Be extremely detailed and precise.
-- Use LaTeX formatting for math formulas.
-- Describe circuit connections, gates, and qubits explicitly.
-- Describes charts, graphs, and tables explicitly.
-- Ignore UI elements, window borders, or irrelevant background.
-- Focus on the technical content."""
+    Provide a detailed, objective transcription of the image about quantum computing and qiskit.
 
-    user_prompt = """Provide a detailed, objective and technical description of this image related to quantum computing, mathematics, or physics.
-If the image is not related to quantum computing, mathematics, or physics, describe in simple terms what it is.
-Focus on:
-- Key visual elements (circuits, gates, qubits, states, diagrams, formulas, graphs, etc.), how they interact
-- Mathematical notation or formulas if present
-- Any labels, legends, or annotations that help understand the image
-- Charts or graphs description if present
+    Requirements:
+    - Be extremely detailed and precise.
+    - Dont provide any explanation about concepts. Any code.
+    - Use LaTeX formatting for math formulas.
+    - Describe circuit connections, gates, and qubits explicitly.
+    - Describes charts, graphs, and tables explicitly.
+    - Ignore UI elements, window borders, or irrelevant background.
+    - Focus on the technical content.
 
-The idea is that it should be possible to understand the image without looking at it."""
+    For quantum circuits:
+    - Describe the circuit definition with all qubits, gates, and measurements in an orderly and organized way. In layers from left to right, describe each operation that is applied to a qubit. Specify if the gate have some parameter
+
+    For Bloch spheres:
+    - Describe the position of each vector precisely (which axis or plane)
+    - State which pure state or superposition each vector represents
+    - Note any labels or annotations on the sphere
+
+    For charts/histograms:
+    - Describe axis labels, units, and ranges
+    - Identify key data points and values
+    - Note patterns in measurement results
+
+    For diagrams/formulas:
+    - Transcribe formulas using LaTeX notation
+    - Describe structure and connections
+    - Identify quantum states and operations"""
+
+    user_prompt = """Provide a detailed, objective transcription of this image related to quantum computing, qiskit, physics, mathematics, or code. Dont provide any explanation about concepts. Any code.
+    If the image is not related to quantum computing, Qiskit, physics, mathematics, or code, describe in simple terms what it is.
+    The idea is that it should be possible to understand the image without looking at it."""
 
     test_images = Path("assets/tests")
     if not test_images.exists():

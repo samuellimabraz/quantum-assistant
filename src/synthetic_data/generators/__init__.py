@@ -1,11 +1,20 @@
 """Synthetic data generation."""
 
-from .category import CategoryManager
+from .category import CategoryClassifier
 from .pipeline import GenerationPipeline
-from .prompts import PromptSet
+from .planner import InputPlanner, InputCandidate, ChunkPlan
+from .prompts import PromptSet, build_context
+from .sessions import AnswerSession, AnswerBatchProcessor, AnswerResult
 
 __all__ = [
-    "CategoryManager",
+    "CategoryClassifier",
     "GenerationPipeline",
+    "InputPlanner",
+    "InputCandidate",
+    "ChunkPlan",
     "PromptSet",
+    "build_context",
+    "AnswerSession",
+    "AnswerBatchProcessor",
+    "AnswerResult",
 ]

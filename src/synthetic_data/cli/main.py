@@ -1,10 +1,8 @@
 """Main CLI application."""
 
 from pathlib import Path
-from typing import Optional
 
 import typer
-from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
@@ -14,17 +12,18 @@ from synthetic_data.cli.commands import (
     transcribe,
     chunk,
     filter_quality,
-    classify,
     generate,
     build,
     export,
     pipeline,
+    inspect,
+    inspect_traces,
 )
 from synthetic_data.utils import PipelineCache
 
 app = typer.Typer(
     name="synthetic-data",
-    help="Clean synthetic dataset generation pipeline",
+    help="Synthetic dataset generation pipeline for quantum computing VLM fine-tuning",
     add_completion=False,
 )
 
@@ -35,11 +34,12 @@ app.command(name="parse", help="Step 1: Parse documents and resolve images")(par
 app.command(name="transcribe", help="Step 2: Transcribe images using VLM")(transcribe)
 app.command(name="chunk", help="Step 3: Chunk documents into context-sized pieces")(chunk)
 app.command(name="filter", help="Step 4: Filter chunks for quality")(filter_quality)
-app.command(name="classify", help="Step 5: Classify chunks into categories")(classify)
-app.command(name="generate", help="Step 6: Generate synthetic Q&A samples")(generate)
-app.command(name="build", help="Step 7: Build train/val/test splits")(build)
-app.command(name="export", help="Step 8: Export to HuggingFace format")(export)
+app.command(name="generate", help="Step 5: Generate samples (includes classification)")(generate)
+app.command(name="build", help="Step 6: Build train/val/test splits")(build)
+app.command(name="export", help="Step 7: Export to HuggingFace format")(export)
 app.command(name="pipeline", help="Run complete pipeline (all steps)")(pipeline)
+app.command(name="inspect", help="Inspect intermediate results (PKL files)")(inspect)
+app.command(name="inspect-traces", help="Inspect generation prompts and responses")(inspect_traces)
 
 
 @app.command()
@@ -49,12 +49,10 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
 
     console.print("\n[bold cyan]Pipeline Configuration[/bold cyan]\n")
 
-    # Sources
     console.print("[bold]Sources:[/bold]")
     for i, source in enumerate(config.sources, 1):
         console.print(f"  {i}. {source.path} ({source.type.value})")
 
-    # Categories
     console.print("\n[bold]Categories:[/bold]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Name", style="cyan")
@@ -66,18 +64,18 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
 
     console.print(table)
 
-    # Generation
     console.print("\n[bold]Generation:[/bold]")
     console.print(f"  Target samples: {config.generation.target_samples:,}")
+    console.print(f"  Candidates per chunk: {config.generation.candidates_per_chunk}")
     console.print(f"  Question model: {config.generation.question_model}")
     console.print(f"  Vision model: {config.generation.vision_model or 'None'}")
     console.print(f"  Answer model: {config.generation.answer_model}")
     console.print(f"  Curate model: {config.generation.curate_model}")
     console.print(f"  Multimodal ratio: {config.generation.multimodal_ratio:.1%}")
     console.print(f"  Content filtering: {config.generation.enable_content_filtering}")
+    console.print(f"  Candidate filtering: {config.generation.enable_candidate_filtering}")
     console.print(f"  Deduplication: {config.generation.enable_deduplication}")
 
-    # Dataset
     console.print("\n[bold]Dataset:[/bold]")
     console.print(f"  Name: {config.dataset.name}")
     console.print(f"  Parsed: {config.dataset.parsed_dir}")
@@ -98,14 +96,12 @@ def validate_config(config_path: Path = typer.Option(..., "--config", "-c", help
         config = PipelineConfig.from_yaml(config_path)
         console.print("[green]✓ Configuration is valid[/green]")
 
-        # Check if sources exist
         for source in config.sources:
             if not Path(source.path).exists():
                 console.print(
                     f"[yellow]⚠ Warning: Source path does not exist: {source.path}[/yellow]"
                 )
 
-        # Validate splits
         total_split = (
             config.dataset.train_split + config.dataset.val_split + config.dataset.test_split
         )

@@ -58,7 +58,7 @@ class LLMClient:
         timeout: float = 300.0,
         max_retries: int = 5,
         retry_delay: float = 1.0,
-        service_tier: str | None = None,
+        service_tier: str | None = "auto",
     ):
         """Initialize LLM client."""
         self.base_url = base_url.rstrip("/")

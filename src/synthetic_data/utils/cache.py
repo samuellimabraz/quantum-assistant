@@ -7,7 +7,7 @@ from typing import Any, Optional
 from datetime import datetime
 
 from synthetic_data.extractors.chunker import Chunk
-from synthetic_data.parsers.base import Document, ImageReference
+from synthetic_data.parsers.base import Document, ImageReference, ImageType
 
 
 class PipelineCache:
@@ -98,7 +98,24 @@ class PipelineCache:
             # Reconstruct ImageReference objects
             images = []
             for img_data in doc_data.get("images", []):
-                images.append(ImageReference(**img_data))
+                # Handle enum conversion for image_type
+                image_type = ImageType.UNKNOWN
+                if "image_type" in img_data:
+                    try:
+                        image_type = ImageType(img_data["image_type"])
+                    except ValueError:
+                        image_type = ImageType.UNKNOWN
+                
+                images.append(ImageReference(
+                    path=img_data["path"],
+                    alt_text=img_data.get("alt_text", ""),
+                    caption=img_data.get("caption", ""),
+                    context=img_data.get("context", ""),
+                    resolved_path=img_data.get("resolved_path"),
+                    transcription=img_data.get("transcription"),
+                    image_type=image_type,
+                    image_id=img_data.get("image_id", ""),
+                ))
             
             doc = Document(
                 source_path=Path(doc_data["source_path"]),
@@ -132,6 +149,8 @@ class PipelineCache:
                             "context": img.context,
                             "resolved_path": img.resolved_path,
                             "transcription": img.transcription,
+                            "image_type": img.image_type.value if isinstance(img.image_type, ImageType) else img.image_type,
+                            "image_id": img.image_id,
                         }
                         for img in doc.images
                     ],
@@ -168,7 +187,24 @@ class PipelineCache:
             # Reconstruct ImageReference objects
             images = []
             for img_data in chunk_data.get("images", []):
-                images.append(ImageReference(**img_data))
+                # Handle enum conversion for image_type
+                image_type = ImageType.UNKNOWN
+                if "image_type" in img_data:
+                    try:
+                        image_type = ImageType(img_data["image_type"])
+                    except ValueError:
+                        image_type = ImageType.UNKNOWN
+                
+                images.append(ImageReference(
+                    path=img_data["path"],
+                    alt_text=img_data.get("alt_text", ""),
+                    caption=img_data.get("caption", ""),
+                    context=img_data.get("context", ""),
+                    resolved_path=img_data.get("resolved_path"),
+                    transcription=img_data.get("transcription"),
+                    image_type=image_type,
+                    image_id=img_data.get("image_id", ""),
+                ))
             
             chunk = Chunk(
                 text=chunk_data["text"],
@@ -177,6 +213,9 @@ class PipelineCache:
                 code_blocks=chunk_data.get("code_blocks", []),
                 images=images,
                 metadata=chunk_data.get("metadata", {}),
+                previous_chunk_text=chunk_data.get("previous_chunk_text", ""),
+                next_chunk_text=chunk_data.get("next_chunk_text", ""),
+                accumulated_code=chunk_data.get("accumulated_code", []),
             )
             chunks.append(chunk)
         
@@ -202,10 +241,15 @@ class PipelineCache:
                             "context": img.context,
                             "resolved_path": img.resolved_path,
                             "transcription": img.transcription,
+                            "image_type": img.image_type.value if isinstance(img.image_type, ImageType) else img.image_type,
+                            "image_id": img.image_id,
                         }
                         for img in chunk.images
                     ],
                     "metadata": chunk.metadata,
+                    "previous_chunk_text": chunk.previous_chunk_text,
+                    "next_chunk_text": chunk.next_chunk_text,
+                    "accumulated_code": chunk.accumulated_code,
                 }
                 for chunk in chunks
             ],

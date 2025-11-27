@@ -2,7 +2,22 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+
+
+class ImageType(str, Enum):
+    """Type of image content for targeted multimodal generation."""
+
+    CIRCUIT = "circuit"  # Quantum circuit diagrams
+    CHART = "chart"  # Histograms, bar charts, line plots
+    BLOCH_SPHERE = "bloch_sphere"  # Bloch sphere visualizations
+    FORMULA = "formula"  # Mathematical formulas and equations
+    DIAGRAM = "diagram"  # General technical diagrams
+    TABLE = "table"  # Tables and structured data
+    CODE_OUTPUT = "code_output"  # Code execution outputs
+    DECORATIVE = "decorative"  # Decorative/non-essential images
+    UNKNOWN = "unknown"  # Unclassified images
 
 
 @dataclass
@@ -15,6 +30,8 @@ class ImageReference:
     context: str = ""
     resolved_path: str | None = None
     transcription: str | None = None  # VLM-generated detailed description
+    image_type: ImageType = ImageType.UNKNOWN  # Classified image type
+    image_id: str = ""  # Unique identifier for chunk references
 
 
 @dataclass

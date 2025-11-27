@@ -83,37 +83,57 @@ class ModelConfig(BaseModel):
 
 
 class PromptsConfig(BaseModel):
-    """Prompts for different generation tasks."""
+    """Prompts for the generation pipeline.
 
-    # System prompts
-    question_generation_system: str = ""
+    Session-Based Generation:
+    1. Input Generation Session:
+       - input_generation_system: System prompt for question + test generation
+       - function_completion_prompt, code_generation_prompt, qa_prompt: Question prompts
+       - test_generation_prompt: Test generation
+
+    2. Answer Generation Session:
+       - answer_generation_system: System prompt for answer + validation loop
+       - function_completion_answer_prompt, code_generation_answer_prompt, qa_answer_prompt
+       - answer_correction_prompt: Correction request when validation fails
+
+    3. Candidate Filtering:
+       - candidate_filter_system, candidate_filter_prompt: Filter generated inputs
+
+    4. Post-Generation Classification:
+       - category_classification, category_classification_system
+    """
+
+    # === INPUT GENERATION SESSION ===
+    input_generation_system: str = ""
+    function_completion_prompt: str = ""
+    code_generation_prompt: str = ""
+    qa_prompt: str = ""
+    test_generation_prompt: str = ""
+
+    # === ANSWER GENERATION SESSION ===
     answer_generation_system: str = ""
-    test_generation_system: str = ""
+    function_completion_answer_prompt: str = ""
+    code_generation_answer_prompt: str = ""
+    qa_answer_prompt: str = ""
+    answer_correction_prompt: str = ""
+
+    # === QUALITY CONTROL ===
     content_filter_system: str = ""
+    content_quality_check: str = ""
     image_filter_system: str = ""
-    category_classification_system: str = ""
-    sample_curation_system: str = ""
+    image_quality_check: str = ""
     image_transcription_system: str = ""
+    image_transcription: str = ""
 
-    # Question type prompts (user prompts)
-    function_completion_prompt: str
-    code_generation_prompt: str
-    qa_prompt: str
+    # === CANDIDATE FILTERING ===
+    candidate_filter_system: str = ""
+    candidate_filter_prompt: str = ""
 
-    # Answer generation
-    answer_with_test_prompt: str  # For code types - receives test to pass
-    answer_without_test_prompt: str  # For QA type
-
-    # Quality checking prompts
-    content_quality_check: str
-    image_quality_check: str
-
-    # Classification and curation
-    category_classification: str
+    # === CLASSIFICATION AND CURATION ===
+    category_classification_system: str = ""
+    category_classification: str = ""
+    sample_curation_system: str = ""
     sample_curation: str = ""
-
-    # VLM prompts
-    image_transcription: str
 
 
 class GenerationConfig(BaseModel):
@@ -125,9 +145,7 @@ class GenerationConfig(BaseModel):
     answer_model: str
     curate_model: str
     filter_model: str | None = None
-    classify_model: str | None = None
 
-    # Async batching configuration
     llm_batch_size: int = Field(default=10, ge=1)
     llm_concurrency: int = Field(default=20, ge=1)
     vlm_batch_size: int = Field(default=16, ge=1)
@@ -141,19 +159,21 @@ class GenerationConfig(BaseModel):
     max_context_length: int = Field(default=2048, ge=1)
     chunk_overlap: int = Field(default=0, ge=0)
 
+    # Input planning
+    candidates_per_chunk: int = Field(default=2, ge=1, le=10)
+    enable_candidate_filtering: bool = Field(default=True)
+
     enable_image_transcription: bool = Field(default=True)
     enable_content_filtering: bool = Field(default=False)
     enable_curate_filtering: bool = Field(default=True)
     enable_deduplication: bool = Field(default=True)
     similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
 
-    # Code verification settings (syntax + execution check)
     enable_code_verification: bool = Field(default=True)
     code_verification_max_iterations: int = Field(default=3, ge=1, le=10)
     code_verification_timeout: int = Field(default=30, ge=5, le=120)
     code_verification_concurrency: int = Field(default=5, ge=1)
 
-    # Test validation settings (for function_completion and code_generation)
     test_validation_timeout: int = Field(default=60, ge=10, le=300)
 
 
@@ -163,7 +183,6 @@ class DatasetConfig(BaseModel):
     name: str
     description: str = ""
 
-    # Output directories for each pipeline stage
     parsed_dir: Path = Field(default=Path("outputs/parsed"))
     generated_dir: Path = Field(default=Path("outputs/generated"))
     final_dir: Path = Field(default=Path("outputs/final"))
