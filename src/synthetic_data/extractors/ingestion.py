@@ -98,6 +98,8 @@ class DocumentIngestion:
                     if doc:
                         if self.image_resolver:
                             self.resolve_document_images(doc)
+                            # Remove unresolved images and their markers from content
+                            self._clean_unresolved_images(doc)
                         # Note: Transcription is done separately in batch after parsing
 
                     return doc
@@ -137,3 +139,37 @@ class DocumentIngestion:
     def _should_include(self, path: Path, source: SourceConfig) -> bool:
         """Check if file should be included (backward compatibility)."""
         return self.should_include(path, source)
+
+    def _clean_unresolved_images(self, document: Document) -> None:
+        """Remove unresolved images and their markers from document content.
+
+        Images without resolved_path cannot be used for training (no actual file).
+        This removes their [IMAGE:id] markers from content and filters them out.
+
+        Args:
+            document: Document to clean (modified in-place)
+        """
+        import re
+
+        resolved_images = []
+        unresolved_markers = []
+
+        for img in document.images:
+            if img.resolved_path:
+                resolved_images.append(img)
+            else:
+                # Collect markers to remove
+                if img.image_id:
+                    unresolved_markers.append(f"[IMAGE:{img.image_id}]")
+
+        # Remove unresolved image markers from content
+        content = document.content
+        for marker in unresolved_markers:
+            content = content.replace(marker, "")
+
+        # Clean up extra whitespace left by removed markers
+        content = re.sub(r"\n\n\n+", "\n\n", content)
+
+        # Update document
+        document.content = content
+        document.images = resolved_images

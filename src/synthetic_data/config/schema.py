@@ -58,6 +58,12 @@ class ModelEndpoint(BaseModel):
     max_tokens: int = Field(default=4096, ge=1)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     service_tier: str | None = Field(default=None)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    top_k: int | None = Field(default=None, ge=1)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    repetition_penalty: float | None = Field(default=None, ge=0.0)
 
     @field_validator("base_url", "api_key", "model_name", mode="before")
     @classmethod
@@ -136,10 +142,17 @@ class PromptsConfig(BaseModel):
     sample_curation: str = ""
 
 
+class TypeAllocationConfig(BaseModel):
+    """Configuration for a single question type's allocation."""
+
+    ratio: float = Field(default=0.33, ge=0.0, le=1.0)  # Portion of total samples
+    multimodal_ratio: float = Field(default=0.5, ge=0.0, le=1.0)  # Portion multimodal
+
+
 class GenerationConfig(BaseModel):
     """Configuration for synthetic data generation."""
 
-    target_samples: int = Field(default=30000, ge=1)
+    target_samples: int = Field(default=8000, ge=1)
     question_model: str
     vision_model: str | None = None
     answer_model: str
@@ -151,13 +164,37 @@ class GenerationConfig(BaseModel):
     vlm_batch_size: int = Field(default=16, ge=1)
     vlm_concurrency: int = Field(default=16, ge=1)
 
-    multimodal_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Per-type allocation configuration
+    type_allocations: dict[str, TypeAllocationConfig] = Field(
+        default_factory=lambda: {
+            "qa": TypeAllocationConfig(ratio=0.30, multimodal_ratio=0.70),
+            "code_generation": TypeAllocationConfig(ratio=0.35, multimodal_ratio=0.30),
+            "function_completion": TypeAllocationConfig(ratio=0.35, multimodal_ratio=0.30),
+        }
+    )
 
+    # Over-allocation to reduce retry attempts (1.8 = generate 80% more candidates)
+    over_allocation_factor: float = Field(default=1.8, ge=1.0, le=3.0)
+
+    # Diversity weight for chunk/image selection (0 = score only, 1 = diversity only)
+    diversity_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+
+    # Maximum generation attempts (reduced from 10 due to over-allocation)
+    max_generation_attempts: int = Field(default=3, ge=1, le=10)
+
+    # Keep extra samples beyond target (if True, scales up proportionally; if False, trims to exact target)
+    keep_extra_samples: bool = Field(default=True)
+
+    # Legacy fields (kept for backwards compatibility)
+    multimodal_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     question_types: list[QuestionType] = Field(default_factory=lambda: list(QuestionType))
     question_type_weights: dict[QuestionType, float] = Field(default_factory=dict)
 
     max_context_length: int = Field(default=2048, ge=1)
+    min_chunk_length: int = Field(default=100, ge=0)
     chunk_overlap: int = Field(default=0, ge=0)
+    max_code_blocks_per_chunk: int = Field(default=4, ge=1, le=10)
+    max_images_per_chunk: int = Field(default=4, ge=1, le=10)
 
     # Input planning
     candidates_per_chunk: int = Field(default=2, ge=1, le=10)

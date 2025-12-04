@@ -77,7 +77,9 @@ class CategoryClassifier:
         max_concurrent: int = 20,
         progress_callback=None,
     ) -> list[str]:
-        """Classify multiple samples concurrently.
+        """Classify multiple samples with full parallelization.
+
+        All samples are classified concurrently up to max_concurrent limit.
 
         Args:
             samples: List of samples to classify
@@ -89,13 +91,16 @@ class CategoryClassifier:
         Returns:
             List of category names
         """
+        if not samples:
+            return []
+
         if not self.llm_client:
             return [self._keyword_classify(s) for s in samples]
 
         categories_desc = self._format_categories()
         system_content = system_prompt.format(categories=categories_desc)
 
-        # Prepare messages
+        # Prepare all messages upfront
         batch_messages = []
         for sample in samples:
             user_prompt = prompt_template.format(
@@ -103,12 +108,14 @@ class CategoryClassifier:
                 answer=sample.answer[:1000],
                 question_type=sample.question_type,
             )
-            batch_messages.append([
-                Message(role="system", content=system_content),
-                Message(role="user", content=user_prompt),
-            ])
+            batch_messages.append(
+                [
+                    Message(role="system", content=system_content),
+                    Message(role="user", content=user_prompt),
+                ]
+            )
 
-        # Batch classify
+        # Classify all concurrently
         responses = await self.llm_client.generate_batch_async(
             batch_messages,
             max_concurrent=max_concurrent,
@@ -117,7 +124,7 @@ class CategoryClassifier:
             progress_callback=progress_callback,
         )
 
-        # Parse responses
+        # Parse responses with fallback
         categories = []
         for i, response in enumerate(responses):
             category = response.strip().lower().replace("-", "_").replace(" ", "_")
@@ -130,9 +137,7 @@ class CategoryClassifier:
 
     def _format_categories(self) -> str:
         """Format categories for prompt."""
-        return "\n".join(
-            f"- {name}: {cat.description}" for name, cat in self.categories.items()
-        )
+        return "\n".join(f"- {name}: {cat.description}" for name, cat in self.categories.items())
 
     def _keyword_classify(self, sample: Sample) -> str:
         """Classify using keyword matching (fallback)."""

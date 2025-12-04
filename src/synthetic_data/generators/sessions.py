@@ -434,19 +434,11 @@ class AnswerSession:
             if process.returncode == 0 and "TEST_PASSED" in stdout_text:
                 return ValidationResult(passed=True)
 
-            error_lines = stderr_text.split("\n")
-            relevant_error = next(
-                (
-                    line
-                    for line in reversed(error_lines)
-                    if "Error:" in line or "assert" in line.lower()
-                ),
-                stderr_text[-500:] if stderr_text else "Unknown error",
-            )
+            error_message = self._extract_error_message(stderr_text)
             return ValidationResult(
                 passed=False,
                 error_type="test_failure",
-                error_message=relevant_error,
+                error_message=error_message,
             )
 
         except (OSError, IOError) as e:
@@ -457,6 +449,88 @@ class AnswerSession:
             )
         finally:
             Path(temp_path).unlink(missing_ok=True)
+
+    def _extract_error_message(self, stderr_text: str) -> str:
+        """Extract meaningful error message from stderr.
+
+        Parses Python tracebacks to extract:
+        - The error type and message
+        - The failing line of code (especially for AssertionError)
+        - Import/attribute errors with full context
+        """
+        if not stderr_text:
+            return "Unknown error"
+
+        lines = stderr_text.split("\n")
+
+        # Find the error line (last line starting with a known error type)
+        error_line_idx = -1
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if line and (
+                line.startswith(
+                    (
+                        "AssertionError",
+                        "TypeError",
+                        "ValueError",
+                        "AttributeError",
+                        "ImportError",
+                        "ModuleNotFoundError",
+                        "NameError",
+                        "KeyError",
+                        "IndexError",
+                        "RuntimeError",
+                        "SyntaxError",
+                        "IndentationError",
+                    )
+                )
+                or "Error:" in line
+            ):
+                error_line_idx = i
+                break
+
+        if error_line_idx == -1:
+            # No standard error found, return last 300 chars
+            return stderr_text[-300:].strip()
+
+        error_line = lines[error_line_idx].strip()
+
+        # For AssertionError, find the assertion line that failed
+        if error_line.startswith("AssertionError"):
+            # Look backwards for the assertion statement
+            for i in range(error_line_idx - 1, max(0, error_line_idx - 10), -1):
+                line = lines[i].strip()
+                if line.startswith("assert "):
+                    # Found the assertion - include it with the error
+                    if error_line == "AssertionError":
+                        return f"AssertionError at: {line}"
+                    else:
+                        return f"{error_line} at: {line}"
+
+            # If no assert found, look for the "File" line with context
+            for i in range(error_line_idx - 1, max(0, error_line_idx - 5), -1):
+                if "File " in lines[i] and ", line " in lines[i]:
+                    # Include the code line after the File line
+                    if i + 1 < error_line_idx:
+                        code_line = lines[i + 1].strip()
+                        if error_line == "AssertionError":
+                            return f"AssertionError at: {code_line}"
+                        else:
+                            return f"{error_line} at: {code_line}"
+                    break
+
+        # For AttributeError/ImportError, include full message
+        if any(
+            error_line.startswith(e)
+            for e in ("AttributeError", "ImportError", "ModuleNotFoundError")
+        ):
+            return error_line
+
+        # For other errors, check if there's useful context
+        if ":" in error_line:
+            return error_line
+
+        return error_line if error_line else stderr_text[-300:].strip()
 
     async def _validate_code_async(self, code: str) -> ValidationResult:
         """Validate code syntax and execution."""
@@ -744,12 +818,16 @@ print("TEST_PASSED")
 
 
 class AnswerBatchProcessor:
-    """Batch processor for answer generation sessions."""
+    """Processor for answer generation with full parallelization.
+
+    All sessions run concurrently up to max_concurrent limit.
+    Each session handles its own validation and correction loop independently.
+    """
 
     def __init__(
         self,
         llm_client: LLMClient,
-        max_concurrent: int = 10,
+        max_concurrent: int = 20,
         tracer: Optional[GenerationTracer] = None,
     ):
         """Initialize batch processor.
@@ -768,7 +846,10 @@ class AnswerBatchProcessor:
         sessions: list[AnswerSession],
         progress_callback=None,
     ) -> list[AnswerResult]:
-        """Process multiple answer sessions concurrently.
+        """Process multiple answer sessions with full parallelization.
+
+        All sessions run concurrently up to max_concurrent limit.
+        No artificial batching - streaming results with immediate progress.
 
         Args:
             sessions: List of answer sessions
@@ -777,18 +858,26 @@ class AnswerBatchProcessor:
         Returns:
             List of AnswerResult
         """
+        if not sessions:
+            return []
+
         semaphore = asyncio.Semaphore(self.max_concurrent)
         completed = [0]
         lock = asyncio.Lock()
 
         async def process_one(session: AnswerSession) -> AnswerResult:
+            """Process single session with concurrency control."""
             async with semaphore:
                 result = await session.generate_and_validate_async()
-                async with lock:
-                    completed[0] += 1
-                    if progress_callback:
-                        progress_callback(completed[0])
-                return result
 
-        results = await asyncio.gather(*[process_one(s) for s in sessions])
+            async with lock:
+                completed[0] += 1
+                if progress_callback:
+                    progress_callback(completed[0])
+
+            return result
+
+        # Launch all concurrently
+        tasks = [process_one(s) for s in sessions]
+        results = await asyncio.gather(*tasks)
         return list(results)

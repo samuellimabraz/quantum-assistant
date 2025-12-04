@@ -30,6 +30,8 @@ class JupyterParser(DocumentParser):
 
         Images (markdown, HTML, data URIs) are extracted as ImageReference objects
         and replaced with [IMAGE:id] markers in the content.
+
+        Code cells are kept with their outputs (text and images) for proper context.
         """
         with open(path, encoding="utf-8") as f:
             nb = nbformat.read(f, as_version=4)
@@ -54,20 +56,24 @@ class JupyterParser(DocumentParser):
                     code_blocks.append(code)
                     content_parts.append(f"```python\n{code}\n```")
 
-                    # Extract output images if cell has outputs
+                    # Extract outputs (text and images) if cell has outputs
                     if hasattr(cell, "outputs") and cell.outputs:
+                        # Extract text outputs first
+                        text_outputs = self._extract_text_outputs(cell.outputs)
+                        if text_outputs:
+                            content_parts.append(f"Output:\n{text_outputs}")
+
+                        # Extract output images
                         output_images = self._extract_output_images(
                             cell.outputs, path, cell_idx, code
                         )
-                        images.extend(output_images)
-
-                        # Insert image markers after the code block
                         if output_images:
+                            images.extend(output_images)
+                            # Insert image markers after the code block
                             image_markers = [
                                 f"[IMAGE:{img.image_id}]" for img in output_images if img.image_id
                             ]
                             if image_markers:
-                                # Add markers as separate content part (will be joined with \n\n)
                                 content_parts.append("\n".join(image_markers))
 
         content = "\n\n".join(content_parts)
@@ -225,6 +231,49 @@ class JupyterParser(DocumentParser):
 
         return content, images
 
+    def _extract_text_outputs(self, outputs: list) -> str:
+        """Extract text outputs from cell outputs.
+
+        Args:
+            outputs: List of cell outputs
+
+        Returns:
+            Combined text output string
+        """
+        text_parts = []
+
+        for output in outputs:
+            output_type = output.get("output_type", "")
+
+            # Stream output (print statements)
+            if output_type == "stream":
+                text = output.get("text", "")
+                if isinstance(text, list):
+                    text = "".join(text)
+                if text.strip():
+                    text_parts.append(text.strip())
+
+            # Execute result or display data with text/plain
+            elif output_type in ("execute_result", "display_data"):
+                data = output.get("data", {})
+                text_plain = data.get("text/plain", "")
+
+                # Skip if it has image MIME types (will be handled as images)
+                if any(mime in data for mime in ["image/png", "image/jpeg", "image/svg+xml"]):
+                    continue
+
+                if isinstance(text_plain, list):
+                    text_plain = "".join(text_plain)
+
+                # Skip JSX Image tags (will be handled by _extract_output_images)
+                if text_plain.strip() and "<Image src=" in text_plain:
+                    continue
+
+                if text_plain.strip():
+                    text_parts.append(text_plain.strip())
+
+        return "\n".join(text_parts) if text_parts else ""
+
     def _extract_output_images(
         self,
         outputs: list,
@@ -234,6 +283,10 @@ class JupyterParser(DocumentParser):
     ) -> list[ImageReference]:
         """
         Extract images from cell outputs.
+
+        Handles:
+        - Embedded image data (image/png, image/jpeg, image/svg+xml)
+        - JSX Image tags: <Image src="/docs/..." /> (Qiskit docs format)
 
         Args:
             outputs: List of cell outputs
@@ -253,7 +306,7 @@ class JupyterParser(DocumentParser):
 
             data = output.get("data", {})
 
-            # Look for image MIME types
+            # First, check for embedded image MIME types
             image_data = None
             image_format = None
 
@@ -263,38 +316,87 @@ class JupyterParser(DocumentParser):
                     image_format = mime_type.split("/")[-1]
                     break
 
-            if not image_data or not self.image_resolver:
+            if image_data and self.image_resolver:
+                # Extract and save the embedded image
+                extracted_path = self.image_resolver.extract_notebook_output_image(
+                    image_data=image_data,
+                    image_format=image_format,
+                    notebook_path=notebook_path,
+                    cell_idx=cell_idx,
+                    output_idx=output_idx,
+                )
+
+                if extracted_path:
+                    context = self._create_output_context(cell_code, output)
+                    alt_text = self._generate_output_alt_text(cell_code, output_idx)
+                    ref_path = (
+                        f"notebook_output:{notebook_path.name}:cell{cell_idx}:output{output_idx}"
+                    )
+                    img_id = self._generate_image_id(ref_path, notebook_path)
+
+                    images.append(
+                        ImageReference(
+                            path=ref_path,
+                            alt_text=alt_text,
+                            context=context,
+                            resolved_path=str(extracted_path),
+                            image_id=img_id,
+                        )
+                    )
                 continue
 
-            # Extract and save the image
-            extracted_path = self.image_resolver.extract_notebook_output_image(
-                image_data=image_data,
-                image_format=image_format,
-                notebook_path=notebook_path,
-                cell_idx=cell_idx,
-                output_idx=output_idx,
+            # Check for JSX Image tags in text/plain (Qiskit docs format)
+            # Format: <Image src="/docs/images/..." alt="..." />
+            text_plain = data.get("text/plain", "")
+            if isinstance(text_plain, list):
+                text_plain = "".join(text_plain)
+
+            jsx_images = self._extract_jsx_image_refs(
+                text_plain, notebook_path, cell_idx, output_idx, cell_code
             )
+            images.extend(jsx_images)
 
-            if extracted_path:
-                # Create context from surrounding code
-                context = self._create_output_context(cell_code, output)
+        return images
 
-                # Generate descriptive alt text based on code
-                alt_text = self._generate_output_alt_text(cell_code, output_idx)
+    def _extract_jsx_image_refs(
+        self,
+        text: str,
+        notebook_path: Path,
+        cell_idx: int,
+        output_idx: int,
+        cell_code: str,
+    ) -> list[ImageReference]:
+        """Extract image references from JSX Image tags.
 
-                # Create reference with special path format
-                ref_path = f"notebook_output:{notebook_path.name}:cell{cell_idx}:output{output_idx}"
-                img_id = self._generate_image_id(ref_path, notebook_path)
+        Handles format: <Image src="/docs/images/..." alt="..." />
+        Common in Qiskit documentation notebooks.
+        """
+        images = []
 
-                images.append(
-                    ImageReference(
-                        path=ref_path,
-                        alt_text=alt_text,
-                        context=context,
-                        resolved_path=str(extracted_path),
-                        image_id=img_id,
-                    )
+        # Match <Image src="..." alt="..." /> pattern
+        pattern = r'<Image\s+src="([^"]+)"(?:\s+alt="([^"]*)")?\s*/>'
+        matches = re.finditer(pattern, text)
+
+        for match in matches:
+            src = match.group(1)
+            alt = match.group(2) or self._generate_output_alt_text(cell_code, output_idx)
+
+            # Create reference path
+            ref_path = f"jsx_image:{notebook_path.name}:cell{cell_idx}:output{output_idx}:{src}"
+            img_id = self._generate_image_id(ref_path, notebook_path)
+
+            # Context from cell code
+            context = self._create_output_context(cell_code, {})
+
+            images.append(
+                ImageReference(
+                    path=src,  # Store the actual src path for resolution
+                    alt_text=alt,
+                    context=context,
+                    image_id=img_id,
+                    # resolved_path will be set by image resolver
                 )
+            )
 
         return images
 

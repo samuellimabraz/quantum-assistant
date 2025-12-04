@@ -123,16 +123,20 @@ class ImageTranscriber:
         checkpoint_interval: int = 50,
     ) -> None:
         """
-        Transcribe images across multiple documents using async batching with checkpoints.
+        Transcribe images across multiple documents with full parallelization.
+
+        Uses pipelined processing:
+        - All images are processed and API calls made concurrently
+        - Checkpoints are saved periodically based on completed count
 
         Args:
             documents: List of documents with images to transcribe
             progress_callback: Optional callback function(completed_count) for progress tracking
             checkpoint_callback: Optional callback function(documents) for checkpoint saving
-            checkpoint_interval: Save checkpoint every N images
+            checkpoint_interval: Save checkpoint every N images completed
         """
         # Collect all images from all documents
-        all_prompts_and_images = []
+        all_items = []
 
         for doc in documents:
             images_to_transcribe = [
@@ -143,67 +147,125 @@ class ImageTranscriber:
                     prompt = self._prepare_prompt(img_ref)
                     image_path = Path(img_ref.resolved_path).resolve()
                     if image_path.exists():
-                        all_prompts_and_images.append((img_ref, prompt, image_path))
+                        all_items.append((img_ref, prompt, image_path))
                 except Exception as e:
                     print(f"Warning: Failed to prepare image {img_ref.path}: {e}")
                     img_ref.transcription = None
 
-        if not all_prompts_and_images:
+        if not all_items:
             return
 
-        # Process in batches with checkpoints between batches
-        completed_count = 0
+        completed_count = [0]
+        last_checkpoint = [0]
+        lock = asyncio.Lock()
 
-        try:
-            for i in range(0, len(all_prompts_and_images), checkpoint_interval):
-                batch_items = all_prompts_and_images[i : i + checkpoint_interval]
-                batch_prompts = [(prompt, img_path) for _, prompt, img_path in batch_items]
+        async def process_one(item: tuple) -> None:
+            """Process a single image with transcription and classification."""
+            img_ref, prompt, image_path = item
 
-                # Transcribe this batch
-                transcriptions = await self.vlm_client.generate_batch_with_images_async(
-                    batch_prompts,
-                    system_prompt=self.system_prompt,
-                    max_concurrent=self.max_concurrent,
-                    progress_callback=None,  # Handle progress manually
+            try:
+                transcription = await self.vlm_client.generate_with_image_async(
+                    prompt, image_path, system_prompt=self.system_prompt
                 )
+                img_ref.transcription = transcription.strip() if transcription else None
 
-                for j, transcription in enumerate(transcriptions):
-                    img_ref = batch_items[j][0]
-                    img_ref.transcription = transcription.strip()
-
-                    # Generate unique ID if not present
+                if img_ref.transcription:
                     if not img_ref.image_id:
                         img_ref.image_id = self._generate_image_id(img_ref)
 
-                    completed_count += 1
+                    if self.enable_classification:
+                        await self._classify_single_image_async(img_ref)
 
-                    # Update progress after each image
-                    if progress_callback:
-                        progress_callback(completed_count)
+            except ValueError as e:
+                print(f"Skipping {image_path.name}: {e}")
+                img_ref.transcription = None
+            except Exception as e:
+                err_type = type(e).__name__
+                print(f"Warning: Failed to transcribe {image_path.name}: {err_type}: {e}")
+                img_ref.transcription = None
 
-                # Classify images if enabled
-                if self.enable_classification:
-                    await self._classify_batch_images_async(batch_items)
+            async with lock:
+                completed_count[0] += 1
+                if progress_callback:
+                    progress_callback(completed_count[0])
 
-                # Save checkpoint after batch is complete and transcriptions are assigned
-                if checkpoint_callback:
+                # Save checkpoint periodically
+                if checkpoint_callback and (
+                    completed_count[0] - last_checkpoint[0] >= checkpoint_interval
+                ):
                     checkpoint_callback(documents)
+                    last_checkpoint[0] = completed_count[0]
 
-        except Exception as e:
-            print(f"Warning: Batch transcription failed: {e}")
-            # Save checkpoint on error with whatever we've completed
-            if checkpoint_callback:
-                checkpoint_callback(documents)
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async def process_with_limit(item: tuple) -> None:
+            async with semaphore:
+                await process_one(item)
+
+        tasks = [process_with_limit(item) for item in all_items]
+        await asyncio.gather(*tasks)
+
+        # Final checkpoint
+        if checkpoint_callback:
+            checkpoint_callback(documents)
+
+    async def _classify_single_image_async(self, img_ref: ImageReference) -> None:
+        """Classify a single image by type using its transcription."""
+        if not img_ref.transcription:
+            return
+
+        try:
+            from synthetic_data.models import Message
+
+            prompt = self._get_classification_prompt(img_ref.transcription)
+
+            messages = [
+                Message(
+                    role="system",
+                    content="You are an image classifier. Respond with ONLY the category name.",
+                ),
+                Message(role="user", content=prompt),
+            ]
+
+            response = await self.vlm_client.generate_async(messages, temperature=0.1)
+            img_ref.image_type = self._parse_image_type(response.strip())
+
+        except Exception:
+            # Fallback to heuristic classification
+            img_ref.image_type = self._heuristic_classify(img_ref.transcription)
 
     def _prepare_prompt(self, img_ref: ImageReference) -> str:
-        """Prepare transcription prompt with context."""
-        context_info = f"Alt text: {img_ref.alt_text}\n" if img_ref.alt_text else ""
-        if img_ref.caption:
-            context_info += f"Caption: {img_ref.caption}\n"
-        if img_ref.context:
-            context_info += f"Context: {img_ref.context[:300]}"
+        """Prepare transcription prompt with context including code references.
 
-        return self.transcription_prompt.format(context=context_info.strip())
+        Provides rich context to improve transcription accuracy:
+        - Alt text and caption for image identification
+        - Surrounding text context for interpretation
+        - Code blocks that may have generated the image (critical for output images)
+        """
+        context_parts = []
+
+        # Basic image identification
+        if img_ref.alt_text:
+            context_parts.append(f"Alt text: {img_ref.alt_text}")
+        if img_ref.caption:
+            context_parts.append(f"Caption: {img_ref.caption}")
+
+        # Surrounding text context (expanded from 300 to 600 chars for better understanding)
+        if img_ref.context:
+            context_parts.append(f"Surrounding text: {img_ref.context[:600]}")
+
+        # Code context - critical for images that are outputs of code execution
+        # This helps the transcriber understand what the visualization represents
+        if hasattr(img_ref, "code_context") and img_ref.code_context:
+            code_preview = img_ref.code_context[:800]
+            context_parts.append(
+                f"Code that may have generated this image:\n```python\n{code_preview}\n```"
+            )
+
+        context_info = (
+            "\n".join(context_parts) if context_parts else "No additional context available"
+        )
+        return self.transcription_prompt.format(context=context_info)
 
     def _transcribe_image(self, img_ref: ImageReference) -> str:
         """
@@ -233,15 +295,12 @@ class ImageTranscriber:
     def _generate_image_id(self, img_ref: ImageReference) -> str:
         """Generate unique ID for an image reference."""
         if img_ref.resolved_path:
-            # Use hash of resolved path for consistency
             path_hash = hashlib.md5(img_ref.resolved_path.encode()).hexdigest()[:12]
             return f"img_{path_hash}"
         elif img_ref.path:
-            # Fallback to original path
             path_hash = hashlib.md5(img_ref.path.encode()).hexdigest()[:12]
             return f"img_{path_hash}"
         else:
-            # Fallback to random ID
             random_hash = hashlib.md5(str(id(img_ref)).encode()).hexdigest()[:12]
             return f"img_{random_hash}"
 
@@ -256,7 +315,6 @@ class ImageTranscriber:
         if not batch_items:
             return
 
-        # Build classification prompts
         classification_prompts = []
         for img_ref, _, _ in batch_items:
             if not img_ref.transcription:
@@ -289,7 +347,6 @@ class ImageTranscriber:
                 temperature=0.1,
             )
 
-            # Assign classifications
             for i, response in enumerate(responses):
                 img_ref = classification_prompts[i][0]
                 img_type = self._parse_image_type(response.strip())

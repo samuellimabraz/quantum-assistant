@@ -8,22 +8,45 @@ from synthetic_data.config.schema import QuestionType
 
 IMAGE_CONTEXT_INSTRUCTIONS = """
 MULTIMODAL INPUT REQUIREMENTS:
-- An image description is provided with specific visual information
-- The image content MUST be essential to understanding and answering
-- Reference SPECIFIC visual elements in your question/answer:
-  * For circuits: gate types (H, X, CNOT), qubit indices (q_0, q_1), angles (π/2, θ)
-  * For histograms: measurement outcomes (|00⟩, |11⟩), probabilities, shot counts
-  * For Bloch spheres: state vectors, rotation angles, axis directions
-  * For diagrams: labeled components, connections, mathematical expressions
-- The task MUST require examining the image to answer correctly
-- DO NOT make the image optional or decorative
-- DO NOT mention the image name, number, use a generic name like "the image" or "the diagram".
+- An image transcription is provided describing what is shown visually
+- Your question/task should REFERENCE the image naturally, not describe it in detail
+- The transcription is for YOUR understanding; the user will SEE the actual image
+- Use simple natural references like:
+  * "the circuit shown in the image"
+  * "the diagram"
+  * "the histogram"
+  * "as shown in the image"
+  * "the circuit diagram"
+- You MAY cite specific key elements when relevant for the task:
+  * "the measurement results shown"
+  * "the H gate in the circuit"
+  * "the qubit connectivity pattern"
+- DO NOT include detailed image descriptions in the question
+- DO NOT describe every element you see - the user has the image
+- DO NOT mention image numbers or filenames
 
-MULTIMODAL EXAMPLES:
-- function_completion: "Implement the circuit shown in the image" (docstring describes gates from image)
-- code_generation: "Create a circuit that produces the measurement distribution shown in the histogram"
-- qa: "Analyze the quantum circuit in the image. What state does it prepare?"
-If the images are described as a large circuit diagram, with too many elements (gates, qubits, etc.), then focus in some particular part, not the whole diagram.
+CRITICAL - TARGET IMAGE ALIGNMENT:
+- Your question MUST be about what is shown in the [TARGET IMAGE] section
+- If [Code That Generated Target Image] is provided, base your task on THAT code
+- Do NOT create questions about other code or content that appears after the target image
+- The target image and its generating code are the PRIMARY focus
+- Other context is supplementary - use it only to understand the domain
+
+MULTIMODAL QUESTION STYLE:
+✓ GOOD: "Create the quantum circuit shown in the image."
+✓ GOOD: "Implement a function that builds the Bell state circuit in the diagram."
+✓ GOOD: "What state does the circuit in the image prepare?"
+✓ GOOD: "Analyze the measurement results in the histogram."
+✗ BAD: "Create a circuit with H gate on q0, then CNOT from q0 to q1 as shown..."
+✗ BAD: "The image shows a 2-qubit circuit with Hadamard and CNOT gates..."
+✗ BAD: Questions about code that appears AFTER the target image in the context
+
+For code tasks with images:
+- PRIORITIZE the [Code That Generated Target Image] section if present
+- This code shows exactly what produces the visualization
+- Base your implementation requirements on THIS code
+- The code is more reliable than the transcription
+- Other code in context is for reference only
 """
 
 

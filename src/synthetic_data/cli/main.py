@@ -8,16 +8,19 @@ from rich.table import Table
 
 from synthetic_data.config import PipelineConfig
 from synthetic_data.cli.commands import (
-    parse,
-    transcribe,
+    analyze,
+    analyze_allocation,
+    build,
     chunk,
+    export,
+    filter_images,
     filter_quality,
     generate,
-    build,
-    export,
-    pipeline,
     inspect,
     inspect_traces,
+    parse,
+    pipeline,
+    transcribe,
 )
 from synthetic_data.utils import PipelineCache
 
@@ -32,14 +35,17 @@ console = Console()
 # Register pipeline commands
 app.command(name="parse", help="Step 1: Parse documents and resolve images")(parse)
 app.command(name="transcribe", help="Step 2: Transcribe images using VLM")(transcribe)
-app.command(name="chunk", help="Step 3: Chunk documents into context-sized pieces")(chunk)
-app.command(name="filter", help="Step 4: Filter chunks for quality")(filter_quality)
-app.command(name="generate", help="Step 5: Generate samples (includes classification)")(generate)
-app.command(name="build", help="Step 6: Build train/val/test splits")(build)
-app.command(name="export", help="Step 7: Export to HuggingFace format")(export)
+app.command(name="filter-images", help="Step 3: Filter images for quality")(filter_images)
+app.command(name="chunk", help="Step 4: Chunk documents into context-sized pieces")(chunk)
+app.command(name="filter-chunks", help="Step 5: Filter chunks for quality")(filter_quality)
+app.command(name="generate", help="Step 6: Generate samples (includes classification)")(generate)
+app.command(name="build", help="Step 7: Build train/val/test splits")(build)
+app.command(name="export", help="Step 8: Export to HuggingFace format")(export)
+app.command(name="analyze", help="Analyze dataset and generate visualizations")(analyze)
 app.command(name="pipeline", help="Run complete pipeline (all steps)")(pipeline)
 app.command(name="inspect", help="Inspect intermediate results (PKL files)")(inspect)
 app.command(name="inspect-traces", help="Inspect generation prompts and responses")(inspect_traces)
+app.command(name="analyze-allocation", help="Analyze allocation strategies and diversity")(analyze_allocation)
 
 
 @app.command()

@@ -27,9 +27,7 @@ class MDXParser(DocumentParser):
         code_blocks = self._extract_code_blocks(cleaned_content)
 
         # Extract images and replace with markers
-        content_with_markers, images = self._extract_and_replace_images(
-            cleaned_content, path
-        )
+        content_with_markers, images = self._extract_and_replace_images(cleaned_content, path)
 
         metadata = self._extract_frontmatter(content)
 
@@ -92,15 +90,36 @@ class MDXParser(DocumentParser):
         return content.strip()
 
     def _extract_code_blocks(self, content: str) -> list[str]:
-        """Extract code blocks from markdown content."""
+        """Extract code blocks from markdown content.
+
+        Only extracts blocks with explicit language identifiers (python, javascript, etc).
+        Generic ``` blocks without language are considered non-code content.
+        """
         code_blocks = []
 
-        pattern = r"```(?:\w+)?\n(.*?)```"
+        # Only match code blocks with explicit language identifier
+        pattern = r"```(\w+)\n(.*?)```"
         matches = re.finditer(pattern, content, re.DOTALL)
 
         for match in matches:
-            code = match.group(1).strip()
-            if code:
+            language = match.group(1).lower()
+            code = match.group(2).strip()
+
+            # Accept common programming languages
+            if code and language in (
+                "python",
+                "javascript",
+                "typescript",
+                "java",
+                "rust",
+                "go",
+                "cpp",
+                "c",
+                "sql",
+                "bash",
+                "sh",
+                "r",
+            ):
                 code_blocks.append(code)
 
         return code_blocks

@@ -25,12 +25,17 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from synthetic_data.config import PipelineConfig
-from synthetic_data.dataset import DatasetBuilder, HuggingFaceExporter
+from synthetic_data.dataset import DatasetAnalyzer, DatasetBuilder, DatasetPlotter, HuggingFaceExporter
 from synthetic_data.extractors import ContentChunker, DocumentIngestion, ImageTranscriber
 from synthetic_data.generators import GenerationPipeline
 from synthetic_data.models import ModelRegistry
-from synthetic_data.parsers.base import Document, ImageType
-from synthetic_data.utils import CheckpointManager, PipelineCache, QualityFilter
+from synthetic_data.parsers.base import Document
+from synthetic_data.utils import (
+    CheckpointManager,
+    ImageQualityFilter,
+    PipelineCache,
+    QualityFilter,
+)
 
 console = Console()
 
@@ -127,13 +132,34 @@ def parse(
     with open(output_file, "wb") as f:
         pickle.dump(all_documents, f)
 
+    # Calculate detailed statistics by source type
+    by_type = {}
+    for doc in all_documents:
+        doc_type = doc.source_path.suffix.lower()
+        if doc_type not in by_type:
+            by_type[doc_type] = {
+                "count": 0,
+                "with_code": 0,
+                "with_images": 0,
+                "total_code_blocks": 0,
+                "total_images": 0,
+            }
+
+        by_type[doc_type]["count"] += 1
+        if doc.code_blocks:
+            by_type[doc_type]["with_code"] += 1
+        if doc.images:
+            by_type[doc_type]["with_images"] += 1
+        by_type[doc_type]["total_code_blocks"] += len(doc.code_blocks)
+        by_type[doc_type]["total_images"] += len(doc.images)
+
+    total_images = sum(len(doc.images) for doc in all_documents)
+
     summary = {
         "total_documents": len(all_documents),
-        "total_images": sum(len(doc.images) for doc in all_documents),
-        "images_resolved": sum(
-            1 for doc in all_documents for img in doc.images if img.resolved_path
-        ),
+        "total_images": total_images,
         "total_code_blocks": sum(len(doc.code_blocks) for doc in all_documents),
+        "by_source_type": by_type,
     }
 
     with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
@@ -144,12 +170,100 @@ def parse(
     table.add_column("Count", style="green", justify="right")
     table.add_row("Documents", str(len(all_documents)))
     table.add_row("Code Blocks", str(summary["total_code_blocks"]))
-    table.add_row("Images Found", str(summary["total_images"]))
-    table.add_row("Images Resolved", str(summary["images_resolved"]))
+    table.add_row("Images", str(total_images))
 
     console.print("\n")
     console.print(table)
+
+    # Source type breakdown
+    if by_type:
+        type_table = Table(title="By Source Type")
+        type_table.add_column("Type", style="cyan")
+        type_table.add_column("Docs", style="green", justify="right")
+        type_table.add_column("Code", style="yellow", justify="right")
+        type_table.add_column("Images", style="magenta", justify="right")
+
+        for doc_type, stats in sorted(by_type.items()):
+            type_table.add_row(
+                doc_type,
+                str(stats["count"]),
+                str(stats["total_code_blocks"]),
+                str(stats["total_images"]),
+            )
+
+        console.print("\n")
+        console.print(type_table)
+
     console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
+
+
+def _associate_code_context_with_images(documents: list) -> int:
+    """Associate code blocks with nearby images to provide context for transcription.
+
+    This helps the VLM understand what code generated the image output.
+    Returns the number of images that received code context.
+    """
+    import re
+
+    code_context_count = 0
+
+    for doc in documents:
+        if not doc.code_blocks or not doc.images:
+            continue
+
+        content = doc.content
+
+        for img in doc.images:
+            if not img.image_id:
+                continue
+
+            # Find the image marker position in content
+            marker = f"[IMAGE:{img.image_id}]"
+            marker_pos = content.find(marker)
+
+            if marker_pos == -1:
+                continue
+
+            # Look for code blocks before this image (within ~2000 chars)
+            # Code that generates output typically appears just before the output image
+            search_start = max(0, marker_pos - 2000)
+            content_before = content[search_start:marker_pos]
+
+            # Find all code block markers in the content before the image
+            # Match patterns like ```python ... ``` or just code references
+            code_pattern = r"```(?:python)?\s*(.*?)```"
+            code_matches = list(re.finditer(code_pattern, content_before, re.DOTALL))
+
+            if code_matches:
+                # Use the closest (last) code block before the image
+                last_code = code_matches[-1].group(1).strip()
+                if last_code and len(last_code) > 20:  # Skip trivial code
+                    img.code_context = last_code[:1000]  # Limit size
+                    code_context_count += 1
+            else:
+                # Fallback: use the most recent code block from doc.code_blocks
+                # that appears to be related (contains draw, plot, visualize, etc.)
+                relevant_keywords = [
+                    "draw",
+                    "plot",
+                    "visualize",
+                    "circuit",
+                    "histogram",
+                    "bloch",
+                    "figure",
+                    "show",
+                    "display",
+                    ".png",
+                    ".svg",
+                ]
+
+                for code_block in reversed(doc.code_blocks):
+                    if any(kw in code_block.lower() for kw in relevant_keywords):
+                        img.code_context = code_block[:1000]
+                        code_context_count += 1
+                        break
+
+    return code_context_count
 
 
 def transcribe(
@@ -182,6 +296,11 @@ def transcribe(
         all_documents = pickle.load(f)
 
     console.print(f"[cyan]Loaded {len(all_documents)} documents[/cyan]")
+
+    # Associate code context with images before transcription
+    code_context_count = _associate_code_context_with_images(all_documents)
+    if code_context_count > 0:
+        console.print(f"[cyan]Associated code context with {code_context_count} images[/cyan]")
 
     output_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -294,7 +413,6 @@ def transcribe(
     # Calculate image classification statistics
     all_images = [img for doc in all_documents for img in doc.images]
     transcribed_images = [img for img in all_images if img.transcription]
-    classified_images = [img for img in transcribed_images if img.image_type != ImageType.UNKNOWN]
 
     # Count by type
     type_counts = {}
@@ -302,13 +420,15 @@ def transcribe(
         type_name = img.image_type.value if img.image_type else "unknown"
         type_counts[type_name] = type_counts.get(type_name, 0) + 1
 
+    classified_count = sum(1 for img in transcribed_images if img.image_type)
+
     # Summary table
     summary_table = Table(title="Transcription Complete")
     summary_table.add_column("Metric", style="cyan")
     summary_table.add_column("Count", style="green", justify="right")
     summary_table.add_row("Total Images", str(len(all_images)))
     summary_table.add_row("Transcribed", str(len(transcribed_images)))
-    summary_table.add_row("Classified", str(len(classified_images)))
+    summary_table.add_row("Classified", str(classified_count))
 
     console.print("\n")
     console.print(summary_table)
@@ -332,7 +452,7 @@ def transcribe(
     summary = {
         "total_images": len(all_images),
         "transcribed": len(transcribed_images),
-        "classified": len(classified_images),
+        "classified": classified_count,
         "type_distribution": type_counts,
     }
 
@@ -342,14 +462,197 @@ def transcribe(
     console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
 
 
+def filter_images(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+):
+    """Step 3: Filter images for quality after transcription."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Step 3: Image Quality Filtering[/bold cyan]\n"
+            "Filter low-quality images and remove from content",
+            title="Filter Images",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    if not config.generation.enable_content_filtering:
+        console.print("[yellow]Content filtering disabled in config, skipping[/yellow]")
+
+        transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
+        output_dir = Path(config.dataset.parsed_dir).parent / "filtered_images"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if (transcribed_dir / "documents.pkl").exists():
+            import shutil
+
+            shutil.copy2(transcribed_dir / "documents.pkl", output_dir / "documents.pkl")
+            console.print(f"[green]✓ Copied unfiltered documents to: {output_dir}[/green]")
+        return
+
+    transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
+    input_file = transcribed_dir / "documents.pkl"
+
+    if not input_file.exists():
+        console.print("[red]✗ No transcribed documents found. Run 'transcribe' first.[/red]")
+        raise typer.Exit(1)
+
+    with open(input_file, "rb") as f:
+        all_documents = pickle.load(f)
+
+    console.print(f"[cyan]Loaded {len(all_documents)} documents[/cyan]")
+
+    output_dir = Path(config.dataset.parsed_dir).parent / "filtered_images"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / "documents.pkl"
+
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "filter_images")
+
+    if output_file.exists() and not no_cache:
+        console.print(f"[cyan]Filtered images already exist: {output_file}[/cyan]")
+        console.print("[yellow]Use --no-cache to re-filter[/yellow]")
+        return
+
+    # Try to resume from checkpoint
+    already_filtered = 0
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            checkpoint_docs, metadata = checkpoint_data
+            already_filtered = metadata.get("filtered_count", 0)
+            if already_filtered > 0:
+                console.print(
+                    f"[cyan]Resuming from checkpoint: "
+                    f"{already_filtered} images already filtered[/cyan]"
+                )
+                all_documents = checkpoint_docs
+
+    # Count images to filter (excluding already filtered ones from checkpoint)
+    images_to_filter = sum(
+        1 for doc in all_documents for img in doc.images if img.transcription and img.resolved_path
+    )
+
+    if images_to_filter == 0:
+        console.print("[yellow]No images to filter[/yellow]")
+        with open(output_file, "wb") as f:
+            pickle.dump(all_documents, f)
+        checkpoint_manager.clear_checkpoint()
+        return
+
+    console.print(f"[cyan]Found {images_to_filter} images to filter[/cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Filtering images...", total=images_to_filter)
+
+        def update_progress(completed_images):
+            progress.update(task, completed=completed_images)
+
+        def save_checkpoint(documents, debug_info):
+            filtered_count = sum(
+                1
+                for doc in documents
+                for img in doc.images
+                if img.transcription and img.resolved_path
+            )
+            metadata = {
+                "filtered_count": filtered_count,
+                "total_images": images_to_filter,
+                "debug_entries": len(debug_info),
+            }
+            checkpoint_manager.save_checkpoint(documents, metadata)
+
+        with ModelRegistry(config.models) as model_registry:
+            filter_model_name = config.generation.filter_model or config.generation.curate_model
+            filter_client = model_registry.get_llm_client(filter_model_name)
+            image_filter = ImageQualityFilter(
+                filter_client, max_concurrent=config.generation.llm_concurrency
+            )
+
+            try:
+                filtered_documents, debug_info = asyncio.run(
+                    image_filter.filter_documents_batch_async(
+                        all_documents,
+                        config.prompts.image_quality_check,
+                        config.prompts.image_filter_system,
+                        progress_callback=update_progress,
+                        checkpoint_callback=save_checkpoint,
+                        checkpoint_interval=config.generation.llm_batch_size,
+                    )
+                )
+            except Exception as e:
+                console.print(f"[red]✗ Image filtering failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
+                raise
+
+    # Save filtered documents
+    with open(output_file, "wb") as f:
+        pickle.dump(filtered_documents, f)
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
+
+    # Save debug info
+    debug_file = output_dir / "image_filter_decisions.jsonl"
+    with open(debug_file, "w", encoding="utf-8") as f:
+        for entry in debug_info:
+            json.dump(entry, f, ensure_ascii=False)
+            f.write("\n")
+
+    # Calculate statistics
+    images_before = sum(len(doc.images) for doc in all_documents)
+    images_after = sum(len(doc.images) for doc in filtered_documents)
+    images_removed = images_before - images_after
+
+    # Get summary from debug info
+    summary_entry = next((e for e in debug_info if e.get("type") == "summary"), {})
+
+    summary = {
+        "documents": len(all_documents),
+        "images_before": images_before,
+        "images_after": images_after,
+        "images_removed": images_removed,
+        **summary_entry,
+    }
+
+    with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+    table = Table(title="Image Filtering Complete")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Before", style="yellow", justify="right")
+    table.add_column("After", style="green", justify="right")
+    table.add_column("Removed", style="red", justify="right")
+    table.add_row(
+        "Images",
+        str(images_before),
+        str(images_after),
+        str(images_removed),
+    )
+
+    console.print("\n")
+    console.print(table)
+    console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
+    console.print(f"[dim]  Filter decisions: {debug_file.name}[/dim]")
+
+
 def chunk(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
 ):
-    """Step 3: Chunk documents into manageable pieces."""
+    """Step 4: Chunk documents into manageable pieces."""
     console.print(
         Panel.fit(
-            "[bold cyan]Step 3: Content Chunking[/bold cyan]\n"
+            "[bold cyan]Step 4: Content Chunking[/bold cyan]\n"
             "Split documents into context-sized chunks",
             title="Chunk",
         )
@@ -357,10 +660,15 @@ def chunk(
 
     config = PipelineConfig.from_yaml(config_path)
 
+    # Try to use filtered_images first, then transcribed, then parsed
+    filtered_images_dir = Path(config.dataset.parsed_dir).parent / "filtered_images"
     transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
     parsed_dir = Path(config.dataset.parsed_dir)
 
-    if (transcribed_dir / "documents.pkl").exists():
+    if (filtered_images_dir / "documents.pkl").exists():
+        input_file = filtered_images_dir / "documents.pkl"
+        console.print("[cyan]Loading filtered image documents[/cyan]")
+    elif (transcribed_dir / "documents.pkl").exists():
         input_file = transcribed_dir / "documents.pkl"
         console.print("[cyan]Loading transcribed documents[/cyan]")
     elif (parsed_dir / "documents.pkl").exists():
@@ -384,7 +692,10 @@ def chunk(
 
     chunker = ContentChunker(
         max_length=config.generation.max_context_length,
+        min_length=config.generation.min_chunk_length,
         overlap=config.generation.chunk_overlap,
+        max_code_blocks_per_chunk=config.generation.max_code_blocks_per_chunk,
+        max_images_per_chunk=config.generation.max_images_per_chunk,
     )
 
     all_chunks = []
@@ -418,25 +729,53 @@ def chunk(
     for chunk in all_chunks:
         all_images_in_chunks.extend(chunk.images)
 
-    # Count unique images by image_id
+    # Count unique images by image_id (deduplicated)
     unique_images_in_chunks = {img.image_id: img for img in all_images_in_chunks if img.image_id}
     images_with_transcription = sum(
         1 for img in unique_images_in_chunks.values() if img.transcription
     )
 
-    # Diagnostic: Compare with transcribed images
-    transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
-    transcribed_count = 0
-    missing_images = []
-    if (transcribed_dir / "documents.pkl").exists():
-        with open(transcribed_dir / "documents.pkl", "rb") as f:
-            transcribed_docs = pickle.load(f)
+    # Breakdown by source type
+    by_type = {}
+    for chunk in all_chunks:
+        doc_type = chunk.source_path.suffix.lower()
+        if doc_type not in by_type:
+            by_type[doc_type] = {
+                "chunks": 0,
+                "with_code": 0,
+                "with_images": 0,
+                "multimodal": 0,
+            }
 
-        all_transcribed_images = [
-            img for doc in transcribed_docs for img in doc.images if img.transcription
-        ]
-        transcribed_count = len(all_transcribed_images)
-        transcribed_image_ids_set = {img.image_id for img in all_transcribed_images if img.image_id}
+        by_type[doc_type]["chunks"] += 1
+        if chunk.code_blocks:
+            by_type[doc_type]["with_code"] += 1
+        if chunk.images:
+            by_type[doc_type]["with_images"] += 1
+        if chunk.is_multimodal:
+            by_type[doc_type]["multimodal"] += 1
+
+    # Diagnostic: Compare with filtered images (source of chunking)
+    # Use the same source that was used for chunking
+    filtered_images_dir = Path(config.dataset.parsed_dir).parent / "filtered_images"
+    source_images_count = 0
+    missing_images = []
+
+    # Determine which source was used for chunking
+    if (filtered_images_dir / "documents.pkl").exists():
+        source_dir = filtered_images_dir
+        source_name = "filtered"
+    else:
+        transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
+        source_dir = transcribed_dir
+        source_name = "transcribed"
+
+    if (source_dir / "documents.pkl").exists():
+        with open(source_dir / "documents.pkl", "rb") as f:
+            source_docs = pickle.load(f)
+
+        all_source_images = [img for doc in source_docs for img in doc.images if img.transcription]
+        source_images_count = len(all_source_images)
         missing_images = [
             {
                 "image_id": img.image_id,
@@ -445,9 +784,16 @@ def chunk(
                 "image_type": img.image_type.value if img.image_type else "unknown",
                 "source": str(img.path).split(":")[0] if ":" in str(img.path) else "unknown",
             }
-            for img in all_transcribed_images
+            for img in all_source_images
             if img.image_id and img.image_id not in unique_images_in_chunks
         ]
+
+    # Quality breakdown
+    from synthetic_data.extractors.chunker import ChunkQuality
+
+    quality_counts = {"high": 0, "medium": 0, "low": 0}
+    for c in all_chunks:
+        quality_counts[c.quality.value] = quality_counts.get(c.quality.value, 0) + 1
 
     summary = {
         "total_chunks": len(all_chunks),
@@ -457,10 +803,16 @@ def chunk(
         "avg_chunk_length": (
             sum(len(c.text) for c in all_chunks) / len(all_chunks) if all_chunks else 0
         ),
-        "total_images_in_chunks": len(unique_images_in_chunks),
+        "image_references_in_chunks": len(
+            all_images_in_chunks
+        ),  # Total references (can have duplicates)
+        "unique_images_in_chunks": len(unique_images_in_chunks),  # Deduplicated by image_id
         "images_with_transcription": images_with_transcription,
-        "transcribed_images_total": transcribed_count,
+        "source_images_total": source_images_count,
+        "source_type": source_name,
         "images_missing_from_chunks": len(missing_images),
+        "by_source_type": by_type,
+        "quality_distribution": quality_counts,
     }
 
     # Save diagnostic file for missing images
@@ -471,7 +823,7 @@ def chunk(
                 json.dump(img_info, f, ensure_ascii=False)
                 f.write("\n")
         console.print(
-            f"[yellow]⚠ {len(missing_images)} transcribed images not found in chunks (saved to {diagnostic_file.name})[/yellow]"
+            f"[yellow]⚠ {len(missing_images)} {source_name} images not found in chunks (saved to {diagnostic_file.name})[/yellow]"
         )
 
     with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
@@ -484,11 +836,17 @@ def chunk(
     table.add_row("Chunks with Code", str(summary["chunks_with_code"]))
     table.add_row("Chunks with Images", str(summary["chunks_with_images"]))
     table.add_row("Multimodal Chunks", str(summary["multimodal_chunks"]))
-    table.add_row("Images in Chunks", str(summary["total_images_in_chunks"]))
-    if transcribed_count > 0:
+    table.add_row(
+        "Image References",
+        str(summary["image_references_in_chunks"]) + " [dim](with duplicates)[/dim]",
+    )
+    table.add_row(
+        "Unique Images", str(summary["unique_images_in_chunks"]) + " [dim](deduplicated)[/dim]"
+    )
+    if source_images_count > 0:
         table.add_row(
-            "Transcribed Images",
-            f"{transcribed_count} (total) / {summary['images_with_transcription']} (in chunks)",
+            f"Source ({source_name})",
+            f"{source_images_count} [dim](total)[/dim] / {summary['images_with_transcription']} [dim](in chunks)[/dim]",
         )
         if missing_images:
             table.add_row(
@@ -499,6 +857,48 @@ def chunk(
 
     console.print("\n")
     console.print(table)
+
+    # Source type breakdown
+    if by_type:
+        type_table = Table(title="By Source Type")
+        type_table.add_column("Type", style="cyan")
+        type_table.add_column("Chunks", style="green", justify="right")
+        type_table.add_column("Code", style="yellow", justify="right")
+        type_table.add_column("Images", style="magenta", justify="right")
+        type_table.add_column("Multimodal", style="blue", justify="right")
+
+        for doc_type, stats in sorted(by_type.items()):
+            type_table.add_row(
+                doc_type,
+                str(stats["chunks"]),
+                str(stats["with_code"]),
+                str(stats["with_images"]),
+                str(stats["multimodal"]),
+            )
+
+        console.print("\n")
+        console.print(type_table)
+
+    # Quality distribution table
+    if quality_counts:
+        quality_table = Table(title="Chunk Quality Distribution")
+        quality_table.add_column("Quality", style="cyan")
+        quality_table.add_column("Count", style="green", justify="right")
+        quality_table.add_column("Percentage", style="magenta", justify="right")
+
+        total = len(all_chunks)
+        for quality, count in [
+            ("high", quality_counts.get("high", 0)),
+            ("medium", quality_counts.get("medium", 0)),
+            ("low", quality_counts.get("low", 0)),
+        ]:
+            pct = (count / total * 100) if total > 0 else 0
+            style = {"high": "green", "medium": "yellow", "low": "red"}.get(quality, "white")
+            quality_table.add_row(f"[{style}]{quality}[/{style}]", str(count), f"{pct:.1f}%")
+
+        console.print("\n")
+        console.print(quality_table)
+
     console.print(f"[green]✓ Saved to: {output_dir}[/green]")
 
 
@@ -506,12 +906,12 @@ def filter_quality(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
 ):
-    """Step 4: Filter chunks for quality."""
+    """Step 5: Filter chunks for quality."""
     console.print(
         Panel.fit(
-            "[bold cyan]Step 4: Quality Filtering[/bold cyan]\n"
-            "Filter low-quality content and images",
-            title="Filter",
+            "[bold cyan]Step 5: Chunk Quality Filtering[/bold cyan]\n"
+            "Filter low-quality content chunks",
+            title="Filter Chunks",
         )
     )
 
@@ -542,32 +942,6 @@ def filter_quality(
         all_chunks = pickle.load(f)
 
     console.print(f"[cyan]Loaded {len(all_chunks)} chunks[/cyan]")
-
-    # Diagnostic: Check how many transcribed images are in chunks
-    transcribed_dir = Path(config.dataset.parsed_dir).parent / "transcribed"
-    if (transcribed_dir / "documents.pkl").exists():
-        with open(transcribed_dir / "documents.pkl", "rb") as f:
-            transcribed_docs = pickle.load(f)
-
-        all_transcribed_images = [
-            img for doc in transcribed_docs for img in doc.images if img.transcription
-        ]
-        images_in_chunks = set()
-        for chunk in all_chunks:
-            for img in chunk.images:
-                if img.image_id:
-                    images_in_chunks.add(img.image_id)
-
-        transcribed_image_ids = {img.image_id for img in all_transcribed_images if img.image_id}
-        missing_from_chunks = transcribed_image_ids - images_in_chunks
-
-        if missing_from_chunks:
-            console.print(
-                f"[yellow]⚠ Warning: {len(missing_from_chunks)} transcribed images not found in any chunk[/yellow]"
-            )
-            console.print(
-                "[dim]  This may indicate images were in content that was filtered out or markers were not properly inserted[/dim]"
-            )
 
     output_dir = Path(config.dataset.parsed_dir).parent / "filtered"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -601,9 +975,7 @@ def filter_quality(
                     quality_filter.filter_chunks_batch_async(
                         all_chunks,
                         config.prompts.content_quality_check,
-                        config.prompts.image_quality_check,
                         config.prompts.content_filter_system,
-                        config.prompts.image_filter_system,
                         batch_size=config.generation.llm_batch_size,
                         max_concurrent=config.generation.llm_concurrency,
                         progress_callback=update_progress,
@@ -626,60 +998,49 @@ def filter_quality(
     if debug_info:
         console.print(f"[dim]Saved {len(debug_info)} filter decisions to {debug_file.name}[/dim]")
 
-    # Calculate image statistics
-    images_before = sum(len(c.images) for c in all_chunks)
-    images_after = sum(len(c.images) for c, passed in filter_results if passed)
-    images_removed = images_before - images_after
+    # Calculate statistics
+    chunks_before = len(all_chunks)
+    chunks_after = len(filtered_chunks)
+    chunks_removed = chunks_before - chunks_after
 
-    # Count unique images before and after
+    # Count images in chunks (for informational purposes)
+    images_before = sum(len(c.images) for c in all_chunks)
+    images_after = sum(len(c.images) for c in filtered_chunks)
+
+    # Count unique images before and after (deduplicated by image_id)
     unique_images_before = set()
-    for chunk in all_chunks:
-        for img in chunk.images:
+    for ch in all_chunks:
+        for img in ch.images:
             if img.image_id:
                 unique_images_before.add(img.image_id)
 
     unique_images_after = set()
-    for chunk, passed in filter_results:
-        if passed:
-            for img in chunk.images:
-                if img.image_id:
-                    unique_images_after.add(img.image_id)
+    for ch in filtered_chunks:
+        for img in ch.images:
+            if img.image_id:
+                unique_images_after.add(img.image_id)
 
     # Count multimodal chunks before and after
     multimodal_before = sum(1 for c in all_chunks if c.is_multimodal)
     multimodal_after = sum(1 for c in filtered_chunks if c.is_multimodal)
 
-    # Count images by filter decision
-    content_rejects = sum(
-        1 for d in debug_info if d.get("type") == "content" and d.get("decision") == "REJECT"
-    )
-    image_rejects = sum(
-        1 for d in debug_info if d.get("type") == "image" and d.get("decision") == "REJECT"
-    )
+    # Count content filter decisions
     content_passes = sum(
         1 for d in debug_info if d.get("type") == "content" and d.get("decision") == "PASS"
     )
-    image_passes = sum(
-        1 for d in debug_info if d.get("type") == "image" and d.get("decision") == "PASS"
+    content_rejects = sum(
+        1 for d in debug_info if d.get("type") == "content" and d.get("decision") == "REJECT"
     )
-
-    # Extract image evaluation statistics
-    image_summary = next((d for d in debug_info if d.get("type") == "summary"), {})
-    images_evaluated = image_summary.get("images_evaluated", 0)
-    images_skipped_no_content = image_summary.get("images_skipped_no_content_pass", 0)
-    images_skipped_no_transcription = image_summary.get("images_skipped_no_transcription", 0)
-    images_skipped_no_resolved = image_summary.get("images_skipped_no_resolved_path", 0)
 
     with open(output_file, "wb") as f:
         pickle.dump(filtered_chunks, f)
 
     summary = {
-        "chunks_before": len(all_chunks),
-        "chunks_after": len(filtered_chunks),
-        "chunks_removed": len(all_chunks) - len(filtered_chunks),
-        "images_before": images_before,
-        "images_after": images_after,
-        "images_removed": images_removed,
+        "chunks_before": chunks_before,
+        "chunks_after": chunks_after,
+        "chunks_removed": chunks_removed,
+        "images_in_chunks_before": images_before,
+        "images_in_chunks_after": images_after,
         "unique_images_before": len(unique_images_before),
         "unique_images_after": len(unique_images_after),
         "multimodal_before": multimodal_before,
@@ -687,16 +1048,6 @@ def filter_quality(
         "content_decisions": {
             "passed": content_passes,
             "rejected": content_rejects,
-        },
-        "image_decisions": {
-            "passed": image_passes,
-            "rejected": image_rejects,
-        },
-        "image_evaluation_stats": {
-            "evaluated": images_evaluated,
-            "skipped_no_content_pass": images_skipped_no_content,
-            "skipped_no_transcription": images_skipped_no_transcription,
-            "skipped_no_resolved_path": images_skipped_no_resolved,
         },
     }
 
@@ -710,18 +1061,18 @@ def filter_quality(
     table.add_column("Removed", style="red", justify="right")
     table.add_row(
         "Chunks",
-        str(len(all_chunks)),
-        str(len(filtered_chunks)),
-        str(len(all_chunks) - len(filtered_chunks)),
+        str(chunks_before),
+        str(chunks_after),
+        str(chunks_removed),
     )
     table.add_row(
-        "Images (total)",
+        "Images (in chunks)",
         str(images_before),
         str(images_after),
-        str(images_removed),
+        str(images_before - images_after),
     )
     table.add_row(
-        "Images (unique)",
+        "Unique Images",
         str(len(unique_images_before)),
         str(len(unique_images_after)),
         str(len(unique_images_before) - len(unique_images_after)),
@@ -736,50 +1087,20 @@ def filter_quality(
     console.print("\n")
     console.print(table)
 
-    # Filter decision breakdown
-    if debug_info:
-        decision_table = Table(title="Filter Decisions")
+    # Content filter decision breakdown
+    if content_passes > 0 or content_rejects > 0:
+        decision_table = Table(title="Content Filter Decisions")
         decision_table.add_column("Type", style="cyan")
         decision_table.add_column("Passed", style="green", justify="right")
         decision_table.add_column("Rejected", style="red", justify="right")
         decision_table.add_row(
-            "Content",
+            "Chunks",
             str(content_passes),
             str(content_rejects),
-        )
-        decision_table.add_row(
-            "Images",
-            str(image_passes),
-            str(image_rejects),
         )
 
         console.print("\n")
         console.print(decision_table)
-
-        # Image evaluation statistics
-        if images_evaluated > 0 or images_skipped_no_content > 0:
-            eval_table = Table(title="Image Evaluation Statistics")
-            eval_table.add_column("Category", style="cyan")
-            eval_table.add_column("Count", style="yellow", justify="right")
-            eval_table.add_row("Images Evaluated", str(images_evaluated))
-            if images_skipped_no_content > 0:
-                eval_table.add_row(
-                    "Skipped (content failed)",
-                    f"[red]{images_skipped_no_content}[/red]",
-                )
-            if images_skipped_no_transcription > 0:
-                eval_table.add_row(
-                    "Skipped (no transcription)",
-                    f"[yellow]{images_skipped_no_transcription}[/yellow]",
-                )
-            if images_skipped_no_resolved > 0:
-                eval_table.add_row(
-                    "Skipped (no resolved path)",
-                    f"[yellow]{images_skipped_no_resolved}[/yellow]",
-                )
-
-            console.print("\n")
-            console.print(eval_table)
 
     console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
     if debug_info:
@@ -793,11 +1114,12 @@ def generate(
         True, "--trace/--no-trace", help="Enable detailed prompt/response tracing"
     ),
 ):
-    """Step 5: Generate synthetic Q&A samples with post-generation classification."""
+    """Step 6: Generate synthetic Q&A samples with post-generation classification."""
     console.print(
         Panel.fit(
-            "[bold cyan]Step 5: Sample Generation[/bold cyan]\n"
+            "[bold cyan]Step 6: Sample Generation[/bold cyan]\n"
             "Generate synthetic Q&A samples from chunks\n"
+            "Uses over-allocation + diversity-aware selection\n"
             "Includes input planning, answer generation, and classification",
             title="Generate",
         )
@@ -824,6 +1146,12 @@ def generate(
 
     console.print(f"[cyan]Loaded {len(all_chunks)} chunks[/cyan]")
     console.print(f"[cyan]Target: {config.generation.target_samples} samples[/cyan]")
+
+    # Show allocation settings
+    over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
+    diversity = getattr(config.generation, "diversity_weight", 0.4)
+    max_attempts = getattr(config.generation, "max_generation_attempts", 3)
+    console.print(f"[cyan]Over-allocation: {over_alloc}x | Diversity weight: {diversity} | Max attempts: {max_attempts}[/cyan]")
 
     output_dir = Path(config.dataset.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1125,10 +1453,10 @@ def generate(
 def build(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
 ):
-    """Step 6: Build train/val/test splits."""
+    """Step 7: Build train/val/test splits."""
     console.print(
         Panel.fit(
-            "[bold cyan]Step 6: Dataset Splits[/bold cyan]\n"
+            "[bold cyan]Step 7: Dataset Splits[/bold cyan]\n"
             "Build stratified train/validation/test splits",
             title="Build",
         )
@@ -1194,11 +1522,14 @@ def export(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
     hub_id: Optional[str] = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
     token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+    with_analysis: bool = typer.Option(
+        False, "--analyze", "-a", help="Run analysis and upload with dataset"
+    ),
 ):
-    """Step 7: Export dataset to HuggingFace format."""
+    """Step 8: Export dataset to HuggingFace format."""
     console.print(
         Panel.fit(
-            "[bold cyan]Step 7: Export Dataset[/bold cyan]\n"
+            "[bold cyan]Step 8: Export Dataset[/bold cyan]\n"
             "Export to HuggingFace Dataset format",
             title="Export",
         )
@@ -1232,6 +1563,24 @@ def export(
     output_path = exporter.save_to_disk(dataset_dict)
     console.print(f"[green]✓ Saved dataset to: {output_path}[/green]")
 
+    # Run analysis if requested
+    analysis_dir = None
+    if with_analysis:
+        console.print("\n[cyan]Running dataset analysis...[/cyan]")
+        base_dir = Path(config.dataset.parsed_dir).parent
+        analysis_dir = base_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+
+        analyzer = DatasetAnalyzer()
+        analyzer.load_from_splits(train_samples, val_samples, test_samples)
+        stats = analyzer.analyze()
+        analyzer.save_statistics(analysis_dir / "statistics.json")
+
+        plotter = DatasetPlotter(stats, output_dir=analysis_dir)
+        plotter.set_samples(analyzer.samples)
+        plot_paths = plotter.plot_all()
+        console.print(f"[green]✓ Generated analysis with {len(plot_paths)} plots[/green]")
+
     if hub_id:
         console.print(f"\n[cyan]Pushing to HuggingFace Hub: {hub_id}[/cyan]")
 
@@ -1251,6 +1600,10 @@ def export(
                 f"[green]✓ Dataset available at: https://huggingface.co/datasets/{hub_id}[/green]"
             )
 
+        # Push analysis if generated
+        if analysis_dir and analysis_dir.exists():
+            _push_analysis_to_hub(analysis_dir, hub_id, token, console)
+
     table = Table(title="Export Complete")
     table.add_column("Split", style="cyan")
     table.add_column("Samples", style="green", justify="right")
@@ -1262,13 +1615,283 @@ def export(
     console.print(table)
 
 
+def analyze(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    source: str = typer.Option(
+        "splits", "--source", "-s", help="Source: splits, generated, or final (HuggingFace)"
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output directory for analysis"
+    ),
+    no_plots: bool = typer.Option(False, "--no-plots", help="Skip plot generation"),
+    include_allocation: bool = typer.Option(
+        True, "--allocation/--no-allocation", help="Include allocation analysis plots"
+    ),
+    include_pipeline: bool = typer.Option(
+        True, "--pipeline/--no-pipeline", help="Include pipeline stage analysis plots"
+    ),
+    hub_id: Optional[str] = typer.Option(
+        None, "--hub-id", "-h", help="Push analysis to HuggingFace Hub"
+    ),
+    token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+):
+    """Analyze dataset distributions and generate visualizations."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Dataset Analysis[/bold cyan]\n"
+            "Analyze distributions and generate Qiskit-styled plots",
+            title="Analyze",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+    base_dir = Path(config.dataset.parsed_dir).parent
+
+    analyzer = DatasetAnalyzer()
+
+    if source == "splits":
+        splits_dir = base_dir / "splits"
+        if not (splits_dir / "train.pkl").exists():
+            console.print("[red]✗ No splits found. Run 'build' first.[/red]")
+            raise typer.Exit(1)
+        console.print(f"[cyan]Loading from: {splits_dir}[/cyan]")
+        analyzer.load_from_pickle(splits_dir)
+
+    elif source == "generated":
+        generated_dir = Path(config.dataset.generated_dir)
+        samples_file = generated_dir / "samples.pkl"
+        if not samples_file.exists():
+            console.print("[red]✗ No samples found. Run 'generate' first.[/red]")
+            raise typer.Exit(1)
+        console.print(f"[cyan]Loading from: {samples_file}[/cyan]")
+        with open(samples_file, "rb") as f:
+            samples = pickle.load(f)
+        analyzer.load_from_splits(samples, [], [])
+
+    elif source == "final":
+        final_dir = Path(config.dataset.final_dir)
+        if not final_dir.exists():
+            console.print("[red]✗ No final dataset found. Run 'export' first.[/red]")
+            raise typer.Exit(1)
+        console.print(f"[cyan]Loading from: {final_dir}[/cyan]")
+        analyzer.load_from_huggingface(final_dir)
+
+    else:
+        console.print(f"[red]✗ Unknown source: {source}[/red]")
+        console.print("[yellow]Available: splits, generated, final[/yellow]")
+        raise typer.Exit(1)
+
+    console.print("[cyan]Computing statistics...[/cyan]")
+    stats = analyzer.analyze()
+
+    if output_dir is None:
+        output_dir = base_dir / "analysis"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    stats_path = analyzer.save_statistics(output_dir / "statistics.json")
+    console.print(f"[green]✓ Statistics saved to: {stats_path}[/green]")
+
+    plot_paths = []
+    if not no_plots:
+        console.print("[cyan]Generating dataset plots...[/cyan]")
+        plotter = DatasetPlotter(stats, output_dir=output_dir)
+        plotter.set_samples(analyzer.samples)
+        plot_paths = plotter.plot_all()
+        console.print(f"[green]✓ Generated {len(plot_paths)} dataset plots[/green]")
+
+    # Pipeline stage analysis (source, images, chunks)
+    pipeline_paths = []
+    if include_pipeline and not no_plots:
+        console.print("[cyan]Generating pipeline stage analysis plots...[/cyan]")
+
+        from synthetic_data.tools.pipeline_analyzer import PipelineAnalyzer
+        from synthetic_data.tools.pipeline_plotter import PipelinePlotter
+
+        pipeline_analyzer = PipelineAnalyzer(base_dir)
+        pipeline_stats = pipeline_analyzer.analyze()
+
+        if pipeline_stats.source.total_files > 0 or pipeline_stats.chunks.total_chunks > 0:
+            pipeline_plotter = PipelinePlotter(pipeline_stats, output_dir)
+            pipeline_paths = pipeline_plotter.plot_all()
+            console.print(f"[green]✓ Generated {len(pipeline_paths)} pipeline plots[/green]")
+        else:
+            console.print("[yellow]⚠ No pipeline data found for analysis[/yellow]")
+
+    # Allocation analysis plots (diversity and target sweeps)
+    allocation_paths = []
+    if include_allocation and not no_plots:
+        filtered_dir = base_dir / "filtered"
+        chunks_file = filtered_dir / "chunks.pkl"
+
+        if chunks_file.exists():
+            console.print("[cyan]Generating allocation sweep plots...[/cyan]")
+
+            from synthetic_data.tools.allocation_analyzer import (
+                ChunkAnalyzer as AllocChunkAnalyzer,
+                AllocationSimulator,
+                AllocationPlotter,
+                load_chunks,
+                get_default_type_configs,
+            )
+            from synthetic_data.generators.allocation import TypeAllocationConfig as AllocTypeConfig
+            from synthetic_data.config import QuestionType
+
+            chunks = load_chunks(chunks_file)
+
+            type_configs = {}
+            if config.generation.type_allocations:
+                for type_name, type_cfg in config.generation.type_allocations.items():
+                    try:
+                        qt = QuestionType(type_name)
+                        type_configs[qt] = AllocTypeConfig(
+                            ratio=type_cfg.ratio,
+                            multimodal_ratio=type_cfg.multimodal_ratio,
+                        )
+                    except ValueError:
+                        pass
+
+            if not type_configs:
+                type_configs = get_default_type_configs()
+
+            chunk_analyzer = AllocChunkAnalyzer(chunks)
+            chunk_analysis = chunk_analyzer.analyze()
+
+            simulator = AllocationSimulator(chunks)
+            target = config.generation.target_samples
+
+            diversity_sweep = simulator.sweep_diversity_weight(target, type_configs)
+            target_sweep = simulator.sweep_target_samples(type_configs)
+
+            alloc_plotter = AllocationPlotter(output_dir)
+            allocation_paths = alloc_plotter.plot_all(chunk_analysis, diversity_sweep, target_sweep)
+            console.print(f"[green]✓ Generated {len(allocation_paths)} allocation plots[/green]")
+        else:
+            console.print("[yellow]⚠ No filtered chunks found, skipping allocation plots[/yellow]")
+
+    _display_analysis_summary(stats, console)
+
+    if hub_id:
+        _push_analysis_to_hub(output_dir, hub_id, token, console)
+
+    all_paths = plot_paths + pipeline_paths + allocation_paths
+    console.print(f"\n[green]✓ Analysis complete: {output_dir}[/green]")
+
+    if all_paths:
+        console.print("\n[dim]Generated files:[/dim]")
+        console.print(f"  [dim]• {stats_path.name}[/dim]")
+        for path in all_paths:
+            console.print(f"  [dim]• {path.name}[/dim]")
+
+
+def _display_analysis_summary(stats, console):
+    """Display analysis summary tables."""
+    # Overview table
+    overview_table = Table(title="Dataset Overview")
+    overview_table.add_column("Metric", style="cyan")
+    overview_table.add_column("Value", style="green", justify="right")
+
+    overview_table.add_row("Total Samples", f"{stats.total_samples:,}")
+
+    aggregated = stats.to_dict()["aggregated"]
+    overview_table.add_row("Multimodal", f"{aggregated['multimodal']:,}")
+    overview_table.add_row("Text-only", f"{aggregated['text_only']:,}")
+    overview_table.add_row("With Tests", f"{aggregated['with_tests']:,}")
+
+    multimodal_ratio = aggregated["multimodal"] / stats.total_samples * 100 if stats.total_samples > 0 else 0
+    overview_table.add_row("Multimodal %", f"{multimodal_ratio:.1f}%")
+
+    console.print("\n")
+    console.print(overview_table)
+
+    # Split distribution table
+    split_table = Table(title="Split Distribution")
+    split_table.add_column("Split", style="cyan")
+    split_table.add_column("Samples", style="green", justify="right")
+    split_table.add_column("%", style="magenta", justify="right")
+    split_table.add_column("Multimodal", style="yellow", justify="right")
+    split_table.add_column("MM %", style="yellow", justify="right")
+
+    for name, split_stats in stats.splits.items():
+        pct = split_stats.total / stats.total_samples * 100 if stats.total_samples > 0 else 0
+        mm_pct = split_stats.multimodal_ratio * 100
+        split_table.add_row(
+            name,
+            f"{split_stats.total:,}",
+            f"{pct:.1f}%",
+            f"{split_stats.multimodal:,}",
+            f"{mm_pct:.1f}%",
+        )
+
+    console.print("\n")
+    console.print(split_table)
+
+    # Type distribution table
+    type_table = Table(title="Question Type Distribution")
+    type_table.add_column("Type", style="cyan")
+    type_table.add_column("Count", style="green", justify="right")
+    type_table.add_column("%", style="magenta", justify="right")
+
+    for qtype, count in sorted(aggregated["by_type"].items(), key=lambda x: x[1], reverse=True):
+        pct = count / stats.total_samples * 100 if stats.total_samples > 0 else 0
+        type_table.add_row(qtype, f"{count:,}", f"{pct:.1f}%")
+
+    console.print("\n")
+    console.print(type_table)
+
+    # Category distribution table
+    if aggregated["by_category"]:
+        cat_table = Table(title="Category Distribution")
+        cat_table.add_column("Category", style="cyan")
+        cat_table.add_column("Count", style="green", justify="right")
+        cat_table.add_column("%", style="magenta", justify="right")
+
+        for cat, count in sorted(aggregated["by_category"].items(), key=lambda x: x[1], reverse=True):
+            pct = count / stats.total_samples * 100 if stats.total_samples > 0 else 0
+            cat_table.add_row(cat, f"{count:,}", f"{pct:.1f}%")
+
+        console.print("\n")
+        console.print(cat_table)
+
+
+def _push_analysis_to_hub(output_dir: Path, hub_id: str, token: Optional[str], console):
+    """Push analysis folder to HuggingFace Hub."""
+    from huggingface_hub import HfApi
+
+    console.print(f"\n[cyan]Pushing analysis to HuggingFace Hub: {hub_id}[/cyan]")
+
+    api = HfApi(token=token)
+
+    # Upload all files in the analysis directory
+    files_uploaded = 0
+    for file_path in output_dir.iterdir():
+        if file_path.is_file():
+            path_in_repo = f"analysis/{file_path.name}"
+            try:
+                api.upload_file(
+                    path_or_fileobj=str(file_path),
+                    path_in_repo=path_in_repo,
+                    repo_id=hub_id,
+                    repo_type="dataset",
+                    token=token,
+                )
+                files_uploaded += 1
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to upload {file_path.name}: {e}[/yellow]")
+
+    if files_uploaded > 0:
+        console.print(f"[green]✓ Uploaded {files_uploaded} files to {hub_id}/analysis/[/green]")
+    else:
+        console.print("[yellow]No files were uploaded[/yellow]")
+
+
 def inspect(
     config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
     stage: str = typer.Option(
         "chunks",
         "--stage",
         "-s",
-        help="Stage to inspect: documents, transcribed, chunks, filtered, samples",
+        help="Stage to inspect: documents, transcribed, filtered_images, chunks, filtered, samples",
     ),
     count: int = typer.Option(3, "--count", "-n", help="Number of items to display"),
     index: Optional[int] = typer.Option(None, "--index", "-i", help="Specific item index"),
@@ -1294,6 +1917,7 @@ def inspect(
     stage_files = {
         "documents": base_dir / "parsed" / "documents.pkl",
         "transcribed": base_dir / "transcribed" / "documents.pkl",
+        "filtered_images": base_dir / "filtered_images" / "documents.pkl",
         "chunks": base_dir / "chunks" / "chunks.pkl",
         "filtered": base_dir / "filtered" / "chunks.pkl",
         "samples": base_dir / "generated" / "samples.pkl",
@@ -1337,7 +1961,7 @@ def inspect(
         return
 
     # Display based on stage type
-    if stage in ("documents", "transcribed"):
+    if stage in ("documents", "transcribed", "filtered_images"):
         _display_documents(items, indices, show_images)
     elif stage in ("chunks", "filtered"):
         _display_chunks(items, indices, show_images, show_code)
@@ -1472,7 +2096,7 @@ def _export_items_to_jsonl(data: list, output_path: Path, stage: str):
 
     with open(output_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(data):
-            if stage in ("documents", "transcribed"):
+            if stage in ("documents", "transcribed", "filtered_images"):
                 record = {
                     "index": i,
                     "source_path": str(item.source_path),
@@ -1537,8 +2161,9 @@ def pipeline(
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
     hub_id: Optional[str] = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
     token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+    skip_analysis: bool = typer.Option(False, "--skip-analysis", help="Skip analysis step"),
 ):
-    """Run the complete pipeline: parse -> transcribe -> chunk -> filter -> generate -> build -> export."""
+    """Run the complete pipeline: parse -> transcribe -> filter-images -> chunk -> filter-chunks -> generate -> build -> export -> analyze."""
     console.print(
         Panel.fit(
             "[bold cyan]Complete Pipeline[/bold cyan]\nRunning all steps sequentially",
@@ -1550,15 +2175,24 @@ def pipeline(
 
     start_time = time.time()
 
+    # Build steps list
     steps = [
         ("Parse", lambda: parse(config_path, no_cache, False)),
         ("Transcribe", lambda: transcribe(config_path, no_cache)),
+        ("Filter Images", lambda: filter_images(config_path, no_cache)),
         ("Chunk", lambda: chunk(config_path, no_cache)),
-        ("Filter", lambda: filter_quality(config_path, no_cache)),
+        ("Filter Chunks", lambda: filter_quality(config_path, no_cache)),
         ("Generate", lambda: generate(config_path, no_cache, enable_tracing=True)),
         ("Build", lambda: build(config_path)),
         ("Export", lambda: export(config_path, hub_id, token)),
     ]
+
+    # Add analysis step if not skipped
+    if not skip_analysis:
+        # Analysis pushes to hub if hub_id provided
+        steps.append(
+            ("Analyze", lambda: analyze(config_path, "splits", None, False, hub_id, token))
+        )
 
     for i, (step_name, step_func) in enumerate(steps, 1):
         console.print(f"\n[bold]━━━ Step {i}/{len(steps)}: {step_name} ━━━[/bold]\n")
@@ -1581,6 +2215,108 @@ def pipeline(
             border_style="green",
         )
     )
+
+
+def analyze_allocation(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    target: int = typer.Option(8000, "--target", "-t", help="Target number of samples"),
+):
+    """Analyze allocation strategies and generate visualizations."""
+    console.print(
+        Panel.fit(
+            "[bold cyan]Allocation Analysis[/bold cyan]\n"
+            "Analyze chunk/image utilization with Qiskit-styled plots",
+            title="Analyze Allocation",
+        )
+    )
+
+    config = PipelineConfig.from_yaml(config_path)
+
+    filtered_dir = Path(config.dataset.parsed_dir).parent / "filtered"
+    chunks_file = filtered_dir / "chunks.pkl"
+
+    if not chunks_file.exists():
+        console.print("[red]✗ No filtered chunks found. Run 'filter-quality' first.[/red]")
+        raise typer.Exit(1)
+
+    from synthetic_data.tools.allocation_analyzer import (
+        ChunkAnalyzer,
+        AllocationSimulator,
+        AllocationPlotter,
+        load_chunks,
+        get_default_type_configs,
+    )
+    from synthetic_data.generators.allocation import TypeAllocationConfig as AllocTypeConfig
+    from synthetic_data.config import QuestionType
+
+    chunks = load_chunks(chunks_file)
+    console.print(f"[cyan]Loaded {len(chunks)} filtered chunks[/cyan]")
+
+    # Build type configs from pipeline config
+    type_configs = {}
+    if config.generation.type_allocations:
+        for type_name, type_cfg in config.generation.type_allocations.items():
+            try:
+                qt = QuestionType(type_name)
+                type_configs[qt] = AllocTypeConfig(
+                    ratio=type_cfg.ratio,
+                    multimodal_ratio=type_cfg.multimodal_ratio,
+                )
+            except ValueError:
+                pass
+
+    if not type_configs:
+        type_configs = get_default_type_configs()
+
+    # Analyze chunks
+    analyzer = ChunkAnalyzer(chunks)
+    analysis = analyzer.analyze()
+
+    console.print(f"\n[bold]Chunk Analysis:[/bold]")
+    console.print(f"  Total: {analysis.total_chunks:,}")
+    console.print(f"  Multimodal: {analysis.multimodal_chunks:,} ({analysis.multimodal_chunks/analysis.total_chunks*100:.1f}%)")
+    console.print(f"  With code: {analysis.chunks_with_code:,} ({analysis.chunks_with_code/analysis.total_chunks*100:.1f}%)")
+    console.print(f"  Unique images: {analysis.unique_images:,}")
+
+    # Run simulations
+    simulator = AllocationSimulator(chunks)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Running allocation simulations...", total=None)
+
+        diversity_sweep = simulator.sweep_diversity_weight(target, type_configs)
+        target_sweep = simulator.sweep_target_samples(type_configs)
+
+        over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
+        div_weight = getattr(config.generation, "diversity_weight", 0.4)
+        current_sim = simulator.simulate(
+            target, type_configs,
+            over_allocation_factor=over_alloc,
+            diversity_weight=div_weight,
+            config_name="current",
+        )
+
+        progress.update(task, description="Generating plots...")
+
+    # Generate plots
+    output_dir = Path(config.dataset.parsed_dir).parent / "analysis"
+    plotter = AllocationPlotter(output_dir)
+    plot_paths = plotter.plot_all(analysis, diversity_sweep, target_sweep)
+
+    console.print(f"\n[bold]Current Allocation (target={target}):[/bold]")
+    console.print(f"  Allocated: {current_sim.total_allocated:,}")
+    console.print(f"  Multimodal: {current_sim.multimodal_allocated:,}")
+    console.print(f"  Chunk coverage: {current_sim.chunk_coverage*100:.1f}%")
+    console.print(f"  Image coverage: {current_sim.image_coverage*100:.1f}%")
+
+    console.print(f"\n[green]✓ Generated {len(plot_paths)} plots[/green]")
+    for path in plot_paths:
+        console.print(f"  [dim]• {path.name}[/dim]")
+    console.print(f"\n[dim]Plots saved to: {output_dir}[/dim]")
 
 
 def inspect_traces(

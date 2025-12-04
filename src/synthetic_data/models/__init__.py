@@ -34,6 +34,12 @@ class SyntheticDataModelRegistry(ModelRegistry):
                     max_tokens=endpoint.max_tokens,
                     temperature=endpoint.temperature,
                     service_tier=endpoint.service_tier,
+                    top_p=endpoint.top_p,
+                    min_p=endpoint.min_p,
+                    top_k=endpoint.top_k,
+                    presence_penalty=endpoint.presence_penalty,
+                    frequency_penalty=endpoint.frequency_penalty,
+                    repetition_penalty=endpoint.repetition_penalty,
                 )
             )
 

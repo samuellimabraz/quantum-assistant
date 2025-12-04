@@ -1,16 +1,23 @@
-"""Input planning for generating candidate inputs from chunks with improved multimodal strategy."""
+"""Input planning for generating candidate inputs from chunks."""
 
 from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from synthetic_data.config import QuestionType
 from synthetic_data.extractors.chunker import Chunk
+from synthetic_data.generators.allocation import (
+    AllocationConfig,
+    AllocationResult,
+    Allocator,
+    SampleTask,
+)
+from synthetic_data.generators.allocation import AllocationMetrics
 from synthetic_data.models import LLMClient, Message
-from synthetic_data.parsers.base import ImageReference, ImageType
+from synthetic_data.parsers.base import ImageReference
 from synthetic_data.utils.tracer import GenerationTracer
 
 if TYPE_CHECKING:
@@ -42,42 +49,19 @@ class InputCandidate:
         return self.rejection_reason is None and self.question
 
 
-@dataclass
-class ChunkPlan:
-    """Plan for generating inputs from a chunk."""
-
-    chunk: Chunk
-    text_candidates: int = 0
-    image_candidates: list[tuple[int, QuestionType]] = field(default_factory=list)
-    suitable_types: list[QuestionType] = field(default_factory=list)
-
-
-@dataclass
-class GenerationTask:
-    """A task for batch generation."""
-
-    chunk: Chunk
-    question_type: QuestionType
-    target_image: Optional[ImageReference] = None
-    context: str = ""
-
-
 class InputPlanner:
-    """Plans and generates candidate inputs from chunks with batch optimization.
+    """Plans and generates candidate inputs from chunks.
 
-    For each chunk, the planner:
-    1. Analyzes content to determine suitable question types
-    2. Identifies images that could anchor multimodal questions
-    3. Generates k candidate inputs using batch API
-    4. Generates and validates tests for code types
-    5. Filters candidates for quality
+    Uses content-aware allocation strategy that:
+    1. Creates unique (chunk, image, type) combinations
+    2. Respects per-type multimodal ratios
+    3. Selects candidates by quality score
     """
 
     def __init__(
         self,
         llm_client: LLMClient,
         prompts: "PromptSet",
-        candidates_per_chunk: int = 3,
         max_concurrent: int = 10,
         test_max_iterations: int = 3,
         tracer: Optional[GenerationTracer] = None,
@@ -87,261 +71,98 @@ class InputPlanner:
         Args:
             llm_client: LLM client for generation
             prompts: Prompt set for generation
-            candidates_per_chunk: Number of candidates to generate per chunk
             max_concurrent: Maximum concurrent requests
             test_max_iterations: Max iterations for test correction loop
             tracer: Optional tracer for logging prompts and responses
         """
         self.llm_client = llm_client
         self.prompts = prompts
-        self.candidates_per_chunk = candidates_per_chunk
         self.max_concurrent = max_concurrent
         self.test_max_iterations = test_max_iterations
         self.tracer = tracer
 
-    def analyze_chunk(self, chunk: Chunk, multimodal_ratio: float = 0.5) -> ChunkPlan:
-        """Analyze a chunk to determine generation potential.
-
-        Returns a plan specifying how many candidates of each type to generate.
-
-        Args:
-            chunk: Content chunk to analyze
-            multimodal_ratio: Target ratio of multimodal candidates (0.0-1.0)
-        """
-        plan = ChunkPlan(chunk=chunk)
-
-        # Determine suitable question types based on content
-        has_code = bool(chunk.code_blocks) or "```" in chunk.text
-        has_concepts = any(
-            kw in chunk.text.lower()
-            for kw in [
-                "quantum",
-                "qubit",
-                "circuit",
-                "gate",
-                "state",
-                "superposition",
-                "entanglement",
-                "measurement",
-            ]
-        )
-
-        if has_code:
-            plan.suitable_types.extend(
-                [QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION]
-            )
-        if has_concepts:
-            plan.suitable_types.append(QuestionType.QA)
-
-        if not plan.suitable_types:
-            plan.suitable_types = [QuestionType.QA]
-
-        # Filter images suitable for multimodal
-        suitable_images = [
-            img for img in chunk.transcribed_images if self._should_use_image_for_multimodal(img)
-        ]
-
-        # Plan multimodal and text-only candidates based on target ratio
-        total_candidates = self.candidates_per_chunk
-
-        if suitable_images and multimodal_ratio > 0:
-            # Calculate multimodal candidates (at least 1 per suitable image, up to ratio)
-            target_multimodal = max(1, int(total_candidates * multimodal_ratio))
-            num_multimodal = min(target_multimodal, len(suitable_images))
-
-            # Plan image-specific candidates
-            for i in range(num_multimodal):
-                if i < len(suitable_images):
-                    img = suitable_images[i]
-                    img_type = self._image_question_type(img)
-                    plan.image_candidates.append((i, img_type))
-
-            # Remaining candidates are text-only
-            plan.text_candidates = total_candidates - num_multimodal
-        else:
-            # All text-only
-            plan.text_candidates = total_candidates
-
-        return plan
-
-    def _image_question_type(self, img: ImageReference) -> QuestionType:
-        """Determine best question type for an image based on its classified type."""
-        # Use classified image type if available
-        if img.image_type == ImageType.CIRCUIT:
-            # Circuits are excellent for code generation (implement what you see)
-            return QuestionType.CODE_GENERATION
-
-        elif img.image_type == ImageType.CHART:
-            # Charts/histograms are good for QA (analyze results)
-            return QuestionType.QA
-
-        elif img.image_type == ImageType.BLOCH_SPHERE:
-            # Bloch spheres can be code or QA
-            return QuestionType.CODE_GENERATION
-
-        elif img.image_type == ImageType.DIAGRAM:
-            # Diagrams are usually QA (explain the diagram)
-            return QuestionType.QA
-
-        elif img.image_type == ImageType.TABLE:
-            # Tables are usually QA (interpret data)
-            return QuestionType.QA
-
-        elif img.image_type == ImageType.CODE_OUTPUT:
-            # Code outputs are QA (analyze output)
-            return QuestionType.QA
-
-        elif img.image_type == ImageType.FORMULA:
-            # Skip formulas for multimodal (usually decorative)
-            return QuestionType.QA
-
-        elif img.image_type == ImageType.DECORATIVE:
-            # Skip decorative images
-            return QuestionType.QA
-
-        # Fallback: use transcription heuristics
-        transcription = img.transcription.lower() if img.transcription else ""
-
-        # Circuit keywords
-        if any(kw in transcription for kw in ["circuit", "gate", "qubit", "hadamard", "cnot"]):
-            return QuestionType.CODE_GENERATION
-
-        # Graphs/charts -> QA (analysis)
-        if any(kw in transcription for kw in ["histogram", "plot", "graph", "chart", "axis"]):
-            return QuestionType.QA
-
-        # Default to QA for explanatory content
-        return QuestionType.QA
-
-    def _should_use_image_for_multimodal(self, img: ImageReference) -> bool:
-        """Determine if an image is suitable for multimodal generation.
-
-        Filters out decorative and formula images that don't add value.
-        """
-        # Skip decorative images
-        if img.image_type == ImageType.DECORATIVE:
-            return False
-
-        # Skip small formula images (usually not essential)
-        if img.image_type == ImageType.FORMULA:
-            # Only use if transcription is substantial
-            if img.transcription and len(img.transcription) < 100:
-                return False
-
-        # Must have transcription
-        if not img.transcription:
-            return False
-
-        # Good types for multimodal
-        good_types = {
-            ImageType.CIRCUIT,
-            ImageType.CHART,
-            ImageType.BLOCH_SPHERE,
-            ImageType.DIAGRAM,
-            ImageType.TABLE,
-            ImageType.CODE_OUTPUT,
-        }
-
-        return img.image_type in good_types or img.image_type == ImageType.UNKNOWN
-
     async def generate_candidates_async(
         self,
         chunks: list[Chunk],
-        question_type_weights: dict[QuestionType, float],
-        multimodal_ratio: float = 0.5,
+        allocation_config: AllocationConfig,
         progress_callback=None,
-    ) -> list[InputCandidate]:
-        """Generate candidate inputs from chunks using optimized batch processing.
+        diversity_weight: float = 0.4,
+    ) -> tuple[list[InputCandidate], AllocationResult]:
+        """Generate candidate inputs from chunks using allocation config.
 
         Args:
             chunks: Content chunks to process
-            question_type_weights: Weights for question type distribution
-            multimodal_ratio: Target ratio of multimodal candidates (0.0-1.0)
+            allocation_config: Configuration for allocation
             progress_callback: Optional callback(completed_count)
+            diversity_weight: Weight for diversity vs score in selection
 
         Returns:
-            List of input candidates
+            Tuple of (candidates list, allocation result)
         """
-        # Phase 1: Prepare all generation tasks
-        tasks = self._prepare_tasks(chunks, question_type_weights, multimodal_ratio)
+        # Phase 1: Allocate chunks to tasks with diversity awareness
+        allocator = Allocator(allocation_config, diversity_weight=diversity_weight)
+        allocation_result = allocator.allocate(chunks)
 
-        # Phase 2: Batch generate questions
+        # Log allocation statistics
+        print(f"    Allocated {len(allocation_result.tasks)} tasks")
+        print(f"    Multimodal: {allocation_result.multimodal_samples}")
+        print(f"    Text-only: {allocation_result.text_only_samples}")
+        print("    By question type:")
+        by_type = allocation_result.samples_by_type()
+        mm_by_type = allocation_result.multimodal_by_type()
+        for qt in QuestionType:
+            total = by_type[qt]
+            mm = mm_by_type[qt]
+            if total > 0:
+                print(f"      {qt.value}: {total} (multimodal: {mm})")
+
+        # Phase 2: Build context for each task
+        tasks = self._build_generation_tasks(allocation_result.tasks)
+
+        # Phase 3: Batch generate questions
         candidates = await self._batch_generate_questions_async(tasks, progress_callback)
 
-        # Phase 3: Generate and validate tests for code types (with correction loop)
+        # Phase 4: Generate and validate tests for code types
         candidates = await self._batch_generate_tests_async(candidates, progress_callback)
 
-        return candidates
+        return candidates, allocation_result
 
-    def _prepare_tasks(
-        self,
-        chunks: list[Chunk],
-        question_type_weights: dict[QuestionType, float],
-        multimodal_ratio: float = 0.5,
-    ) -> list[GenerationTask]:
-        """Prepare all generation tasks from chunks."""
-        tasks = []
+    def _build_generation_tasks(
+        self, sample_tasks: list[SampleTask]
+    ) -> list[tuple[SampleTask, str]]:
+        """Build context strings for each sample task.
 
-        for chunk in chunks:
-            plan = self.analyze_chunk(chunk, multimodal_ratio)
+        Returns list of (task, context) tuples.
+        """
+        tasks_with_context = []
 
-            # Text-only candidates
-            for _ in range(plan.text_candidates):
-                qtype = self._weighted_type_choice(plan.suitable_types, question_type_weights)
-                context = chunk.build_context_with_transcriptions(include_code=True)
-                tasks.append(
-                    GenerationTask(
-                        chunk=chunk,
-                        question_type=qtype,
-                        target_image=None,
-                        context=context,
-                    )
-                )
+        for task in sample_tasks:
+            context = task.chunk.build_context_with_transcriptions(
+                target_image_id=task.target_image.image_id if task.target_image else None,
+                include_code=True,
+            )
+            tasks_with_context.append((task, context))
 
-            # Image-specific candidates (using suitable images only)
-            suitable_images = [
-                img
-                for img in chunk.transcribed_images
-                if self._should_use_image_for_multimodal(img)
-            ]
-
-            for img_idx, qtype in plan.image_candidates:
-                if img_idx < len(suitable_images):
-                    target_img = suitable_images[img_idx]
-                    # Build context with target image emphasized
-                    context = chunk.build_context_with_transcriptions(
-                        target_image_id=target_img.image_id,
-                        include_code=True,
-                    )
-                    tasks.append(
-                        GenerationTask(
-                            chunk=chunk,
-                            question_type=qtype,
-                            target_image=target_img,
-                            context=context,
-                        )
-                    )
-
-        return tasks
+        return tasks_with_context
 
     async def _batch_generate_questions_async(
         self,
-        tasks: list[GenerationTask],
+        tasks: list[tuple[SampleTask, str]],
         progress_callback=None,
     ) -> list[InputCandidate]:
         """Batch generate questions for all tasks."""
         if not tasks:
             return []
 
-        # Build batch of message lists and trace conversations
+        # Build batch of message lists
         message_batches = []
         conversations = []
 
-        for task in tasks:
-            use_image = task.target_image is not None
+        for task, context in tasks:
+            use_image = task.is_multimodal
             system_prompt = self.prompts.get_input_system_prompt(use_image=use_image)
             question_prompt = self.prompts.get_question_prompt(task.question_type).format(
-                context=task.context
+                context=context
             )
             message_batches.append(
                 [
@@ -357,6 +178,7 @@ class InputPlanner:
                     question_type=task.question_type.value,
                     is_multimodal=use_image,
                     chunk_id=task.chunk.chunk_id,
+                    score=task.score,
                 )
                 self.tracer.log_message(conv, "system", system_prompt)
                 self.tracer.log_message(conv, "user", question_prompt)
@@ -374,7 +196,7 @@ class InputPlanner:
 
         # Build candidates from responses
         candidates = []
-        for task, response, conv in zip(tasks, responses, conversations):
+        for (task, context), response, conv in zip(tasks, responses, conversations):
             question = response.strip() if response else ""
 
             # Log response
@@ -393,7 +215,8 @@ class InputPlanner:
                         question="",
                         question_type=task.question_type,
                         target_image=task.target_image,
-                        context=task.context,
+                        context=context,
+                        score=task.score,
                         rejection_reason="Empty question generated",
                     )
                 )
@@ -416,7 +239,8 @@ class InputPlanner:
                     question_type=task.question_type,
                     entry_point=entry_point,
                     target_image=task.target_image,
-                    context=task.context,
+                    context=context,
+                    score=task.score,
                 )
             )
 
@@ -438,7 +262,7 @@ class InputPlanner:
 
         for c in candidates:
             if c.question_type in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION):
-                if c.is_valid:  # Only process valid candidates
+                if c.is_valid:
                     code_candidates.append(c)
                 else:
                     non_code_candidates.append(c)
@@ -461,31 +285,34 @@ class InputPlanner:
         progress_callback=None,
     ) -> list[InputCandidate]:
         """Generate tests with validation and correction loop."""
+        if not candidates:
+            return []
+
         semaphore = asyncio.Semaphore(self.max_concurrent)
-        lock = asyncio.Lock()
         completed = [0]
+        lock = asyncio.Lock()
 
         async def process_one(candidate: InputCandidate) -> InputCandidate:
+            """Process single candidate with concurrency control."""
             async with semaphore:
                 result = await self._generate_test_with_correction_async(candidate)
-                async with lock:
-                    completed[0] += 1
-                    if progress_callback:
-                        progress_callback(completed[0])
-                return result
 
-        results = await asyncio.gather(*[process_one(c) for c in candidates])
+            async with lock:
+                completed[0] += 1
+                if progress_callback:
+                    progress_callback(completed[0])
+
+            return result
+
+        tasks = [process_one(c) for c in candidates]
+        results = await asyncio.gather(*tasks)
         return list(results)
 
     async def _generate_test_with_correction_async(
         self,
         candidate: InputCandidate,
     ) -> InputCandidate:
-        """Generate and validate test for a candidate with correction loop.
-
-        Tests are mandatory for code types. If validation fails after max iterations,
-        the candidate is rejected (marked invalid).
-        """
+        """Generate and validate test for a candidate with correction loop."""
         # Start conversation trace
         conv = None
         if self.tracer:
@@ -654,17 +481,7 @@ class InputPlanner:
         system_prompt: str,
         progress_callback=None,
     ) -> list[InputCandidate]:
-        """Filter candidates for quality using batch API.
-
-        Args:
-            candidates: Candidates to filter
-            filter_prompt: Prompt template for filtering
-            system_prompt: System prompt for filtering
-            progress_callback: Optional callback(completed_count)
-
-        Returns:
-            Filtered list of valid candidates
-        """
+        """Filter candidates for quality using batch API."""
         valid_candidates = [c for c in candidates if c.is_valid]
 
         if not valid_candidates:
@@ -727,32 +544,6 @@ class InputPlanner:
 
         return "REJECT", reason
 
-    def _weighted_type_choice(
-        self,
-        suitable_types: list[QuestionType],
-        weights: dict[QuestionType, float],
-    ) -> QuestionType:
-        """Choose a question type based on weights."""
-        import random
-
-        if not suitable_types:
-            return QuestionType.QA
-
-        type_weights = [(t, weights.get(t, 1.0)) for t in suitable_types]
-        total = sum(w for _, w in type_weights)
-
-        if total == 0:
-            return random.choice(suitable_types)
-
-        r = random.random() * total
-        cumulative = 0
-        for t, w in type_weights:
-            cumulative += w
-            if r <= cumulative:
-                return t
-
-        return suitable_types[-1]
-
     def _extract_entry_point(self, question: str) -> Optional[str]:
         """Extract function name from question."""
         patterns = [
@@ -797,5 +588,55 @@ class InputPlanner:
 
         if entry_point not in test_code:
             return f"Test must call '{entry_point}'"
+
+        # Check for deprecated/unavailable Qiskit APIs
+        deprecated_error = self._check_deprecated_apis(test_code)
+        if deprecated_error:
+            return deprecated_error
+
+        return None
+
+    def _check_deprecated_apis(self, test_code: str) -> Optional[str]:
+        """Check for deprecated or unavailable Qiskit APIs in test code.
+
+        Returns error message if deprecated APIs found, None otherwise.
+        """
+        # Known deprecated/removed APIs in Qiskit 2.0
+        deprecated_patterns = [
+            (r"from\s+qiskit\.test", "qiskit.test module removed in Qiskit 2.0"),
+            (
+                r"from\s+qiskit\.providers\.fake_provider\s+import\s+.*FakeVigo",
+                "FakeVigo removed - use FakeGeneric or qiskit_ibm_runtime.fake_provider",
+            ),
+            (
+                r"from\s+qiskit\.primitives\s+import\s+.*BaseEstimator",
+                "BaseEstimator removed - use StatevectorEstimator directly",
+            ),
+            (
+                r"from\s+qiskit\.circuit\.library\s+import\s+.*random_clifford",
+                "random_clifford moved to qiskit.quantum_info.random_clifford",
+            ),
+            (r"\.bind_parameters\s*\(", "bind_parameters deprecated - use assign_parameters"),
+            (
+                r"qiskit\.execute\s*\(",
+                "qiskit.execute removed - use primitives (Sampler/Estimator)",
+            ),
+            (
+                r"from\s+qiskit\s+import\s+.*execute",
+                "execute removed - use primitives (Sampler/Estimator)",
+            ),
+            (
+                r"\.operation\.qubits",
+                "Wrong API: use circuit_instruction.qubits not .operation.qubits",
+            ),
+            (
+                r"\.operation\.clbits",
+                "Wrong API: use circuit_instruction.clbits not .operation.clbits",
+            ),
+        ]
+
+        for pattern, message in deprecated_patterns:
+            if re.search(pattern, test_code):
+                return f"Deprecated API: {message}"
 
         return None

@@ -16,7 +16,7 @@ class PipelineCache:
     def __init__(self, cache_dir: Path):
         """
         Initialize cache manager.
-        
+
         Args:
             cache_dir: Directory to store cache files
         """
@@ -45,12 +45,12 @@ class PipelineCache:
     def get_stage_cache_key(self, stage: str, config: dict, source_files: list[Path]) -> str:
         """
         Generate cache key for a pipeline stage.
-        
+
         Args:
             stage: Stage name (parse, chunk, filter, etc.)
             config: Relevant config for this stage
             source_files: Input files for this stage
-            
+
         Returns:
             Cache key string
         """
@@ -62,24 +62,24 @@ class PipelineCache:
                     "size": path.stat().st_size,
                     "mtime": path.stat().st_mtime,
                 }
-        
+
         cache_data = {
             "stage": stage,
             "config": config,
             "files": file_info,
         }
-        
+
         return self._compute_hash(cache_data)
 
     def is_cached(self, stage: str, cache_key: str) -> bool:
         """Check if stage results are cached."""
         if stage not in self.manifest.get("stages", {}):
             return False
-        
+
         stage_info = self.manifest["stages"][stage]
         if stage_info.get("key") != cache_key:
             return False
-        
+
         # Check if cached files exist
         cache_file = self.cache_dir / f"{stage}_{cache_key[:8]}.json"
         return cache_file.exists()
@@ -88,11 +88,11 @@ class PipelineCache:
         """Load cached documents."""
         if not self.is_cached(stage, cache_key):
             return None
-        
+
         cache_file = self.cache_dir / f"{stage}_{cache_key[:8]}.json"
         with open(cache_file, "r") as f:
             data = json.load(f)
-        
+
         documents = []
         for doc_data in data["documents"]:
             # Reconstruct ImageReference objects
@@ -105,18 +105,20 @@ class PipelineCache:
                         image_type = ImageType(img_data["image_type"])
                     except ValueError:
                         image_type = ImageType.UNKNOWN
-                
-                images.append(ImageReference(
-                    path=img_data["path"],
-                    alt_text=img_data.get("alt_text", ""),
-                    caption=img_data.get("caption", ""),
-                    context=img_data.get("context", ""),
-                    resolved_path=img_data.get("resolved_path"),
-                    transcription=img_data.get("transcription"),
-                    image_type=image_type,
-                    image_id=img_data.get("image_id", ""),
-                ))
-            
+
+                images.append(
+                    ImageReference(
+                        path=img_data["path"],
+                        alt_text=img_data.get("alt_text", ""),
+                        caption=img_data.get("caption", ""),
+                        context=img_data.get("context", ""),
+                        resolved_path=img_data.get("resolved_path"),
+                        transcription=img_data.get("transcription"),
+                        image_type=image_type,
+                        image_id=img_data.get("image_id", ""),
+                    )
+                )
+
             doc = Document(
                 source_path=Path(doc_data["source_path"]),
                 title=doc_data.get("title", ""),
@@ -126,13 +128,13 @@ class PipelineCache:
                 metadata=doc_data.get("metadata", {}),
             )
             documents.append(doc)
-        
+
         return documents
 
     def save_documents(self, stage: str, cache_key: str, documents: list[Document]):
         """Save documents to cache."""
         cache_file = self.cache_dir / f"{stage}_{cache_key[:8]}.json"
-        
+
         # Serialize documents
         data = {
             "documents": [
@@ -149,7 +151,11 @@ class PipelineCache:
                             "context": img.context,
                             "resolved_path": img.resolved_path,
                             "transcription": img.transcription,
-                            "image_type": img.image_type.value if isinstance(img.image_type, ImageType) else img.image_type,
+                            "image_type": (
+                                img.image_type.value
+                                if isinstance(img.image_type, ImageType)
+                                else img.image_type
+                            ),
                             "image_id": img.image_id,
                         }
                         for img in doc.images
@@ -160,10 +166,10 @@ class PipelineCache:
             ],
             "timestamp": datetime.now().isoformat(),
         }
-        
+
         with open(cache_file, "w") as f:
             json.dump(data, f, indent=2)
-        
+
         # Update manifest
         self.manifest["stages"][stage] = {
             "key": cache_key,
@@ -177,11 +183,11 @@ class PipelineCache:
         """Load cached chunks."""
         if not self.is_cached(stage, cache_key):
             return None
-        
+
         cache_file = self.cache_dir / f"{stage}_{cache_key[:8]}.json"
         with open(cache_file, "r") as f:
             data = json.load(f)
-        
+
         chunks = []
         for chunk_data in data["chunks"]:
             # Reconstruct ImageReference objects
@@ -194,18 +200,20 @@ class PipelineCache:
                         image_type = ImageType(img_data["image_type"])
                     except ValueError:
                         image_type = ImageType.UNKNOWN
-                
-                images.append(ImageReference(
-                    path=img_data["path"],
-                    alt_text=img_data.get("alt_text", ""),
-                    caption=img_data.get("caption", ""),
-                    context=img_data.get("context", ""),
-                    resolved_path=img_data.get("resolved_path"),
-                    transcription=img_data.get("transcription"),
-                    image_type=image_type,
-                    image_id=img_data.get("image_id", ""),
-                ))
-            
+
+                images.append(
+                    ImageReference(
+                        path=img_data["path"],
+                        alt_text=img_data.get("alt_text", ""),
+                        caption=img_data.get("caption", ""),
+                        context=img_data.get("context", ""),
+                        resolved_path=img_data.get("resolved_path"),
+                        transcription=img_data.get("transcription"),
+                        image_type=image_type,
+                        image_id=img_data.get("image_id", ""),
+                    )
+                )
+
             chunk = Chunk(
                 text=chunk_data["text"],
                 source_path=Path(chunk_data["source_path"]),
@@ -218,13 +226,13 @@ class PipelineCache:
                 accumulated_code=chunk_data.get("accumulated_code", []),
             )
             chunks.append(chunk)
-        
+
         return chunks
 
     def save_chunks(self, stage: str, cache_key: str, chunks: list[Chunk]):
         """Save chunks to cache."""
         cache_file = self.cache_dir / f"{stage}_{cache_key[:8]}.json"
-        
+
         # Serialize chunks
         data = {
             "chunks": [
@@ -241,7 +249,11 @@ class PipelineCache:
                             "context": img.context,
                             "resolved_path": img.resolved_path,
                             "transcription": img.transcription,
-                            "image_type": img.image_type.value if isinstance(img.image_type, ImageType) else img.image_type,
+                            "image_type": (
+                                img.image_type.value
+                                if isinstance(img.image_type, ImageType)
+                                else img.image_type
+                            ),
                             "image_id": img.image_id,
                         }
                         for img in chunk.images
@@ -255,10 +267,10 @@ class PipelineCache:
             ],
             "timestamp": datetime.now().isoformat(),
         }
-        
+
         with open(cache_file, "w") as f:
             json.dump(data, f, indent=2)
-        
+
         # Update manifest
         self.manifest["stages"][stage] = {
             "key": cache_key,

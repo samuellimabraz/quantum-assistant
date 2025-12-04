@@ -16,6 +16,12 @@ class ModelEndpoint:
         temperature: float = 0.7,
         timeout: float = 300.0,
         service_tier: str | None = None,
+        top_p: float | None = None,
+        min_p: float | None = None,
+        top_k: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        repetition_penalty: float | None = None,
     ):
         self.name = name
         self.base_url = base_url
@@ -25,6 +31,12 @@ class ModelEndpoint:
         self.temperature = temperature
         self.timeout = timeout
         self.service_tier = service_tier
+        self.top_p = top_p
+        self.min_p = min_p
+        self.top_k = top_k
+        self.presence_penalty = presence_penalty
+        self.frequency_penalty = frequency_penalty
+        self.repetition_penalty = repetition_penalty
 
 
 class ModelRegistry:
@@ -55,6 +67,12 @@ class ModelRegistry:
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
             service_tier=endpoint.service_tier,
+            top_p=endpoint.top_p,
+            min_p=endpoint.min_p,
+            top_k=endpoint.top_k,
+            presence_penalty=endpoint.presence_penalty,
+            frequency_penalty=endpoint.frequency_penalty,
+            repetition_penalty=endpoint.repetition_penalty,
         )
         self._clients[model_name] = client
         return client
@@ -78,6 +96,12 @@ class ModelRegistry:
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
             service_tier=endpoint.service_tier,
+            top_p=endpoint.top_p,
+            min_p=endpoint.min_p,
+            top_k=endpoint.top_k,
+            presence_penalty=endpoint.presence_penalty,
+            frequency_penalty=endpoint.frequency_penalty,
+            repetition_penalty=endpoint.repetition_penalty,
         )
         self._clients[model_name] = client
         return client

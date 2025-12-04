@@ -27,11 +27,12 @@ class ImageReference:
     path: str
     alt_text: str = ""
     caption: str = ""
-    context: str = ""
+    context: str = ""  # Surrounding text context
     resolved_path: str | None = None
     transcription: str | None = None  # VLM-generated detailed description
     image_type: ImageType = ImageType.UNKNOWN  # Classified image type
     image_id: str = ""  # Unique identifier for chunk references
+    code_context: str = ""  # Code that may have generated this image (for outputs)
 
 
 @dataclass
