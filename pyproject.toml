@@ -32,6 +32,23 @@ dependencies = [
     "qiskit-aer>=0.17.2",
     "torch>=2.9.1",
     "qiskit-addon-sqd>=0.12.0",
+    "qiskit-addon-pna>=0.2.0",
+    "qiskit-addon-slc>=0.1.0",
+    "qiskit-addon-utils>=0.3.0",
+    "samplomatic>=0.13.0",
+    "mthree>=3.0.0",
+    "rustworkx>=0.17.1",
+    "imbalanced-learn>=0.14.0",
+    "qiskit-addon-obp>=0.3.0",
+    "gem-suite>=0.1.6",
+    "qiskit-addon-mpf>=0.3.0",
+    "quimb>=1.11.2",
+    "qiskit-quimb>=0.0.9",
+    "yfinance>=0.2.66",
+    "qiskit-ibm-transpiler>=0.13.1",
+    "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
+    "pysat>=3.2.2",
+    "python-sat>=1.8.dev24",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +61,7 @@ dev = [
 [project.scripts]
 synthetic-data = "synthetic_data.cli.main:app"
 evaluate = "evaluate.cli:app"
+finetune = "finetune.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
