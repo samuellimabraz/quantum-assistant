@@ -50,6 +50,8 @@ dependencies = [
     "pysat>=3.2.2",
     "python-sat>=1.8.dev24",
     "ms-swift>=3.10.3",
+    "plotly>=6.5.0",
+    "kaleido>=1.2.0",
 ]
 
 [project.optional-dependencies]
