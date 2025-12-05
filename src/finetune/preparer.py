@@ -4,11 +4,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from datasets import DatasetDict, load_from_disk
+from datasets import DatasetDict, load_dataset, load_from_disk
 from PIL import Image
 from tqdm import tqdm
 
-from .config import FinetuneConfig, QuestionType
+from .config import FinetuneConfig
 from .formatter import SwiftFormatter, SwiftSample
 from .image_processor import ImageProcessor
 
@@ -31,8 +31,13 @@ class PrepareResult:
 class DatasetPreparer:
     """Prepare datasets for ms-swift fine-tuning.
 
+    Supports loading from:
+    - HuggingFace Hub (e.g., "samuellimabraz/quantum-test")
+    - Local parquet files (downloaded from Hub)
+    - Local Arrow format (from save_to_disk)
+
     Orchestrates the complete preparation pipeline:
-    1. Load HuggingFace dataset from disk
+    1. Load HuggingFace dataset
     2. Process and resize images
     3. Format samples for ms-swift
     4. Write JSONL files for each split
@@ -83,9 +88,82 @@ class DatasetPreparer:
         )
 
     def _load_dataset(self) -> DatasetDict:
-        """Load HuggingFace dataset from disk."""
-        print(f"Loading dataset from {self.config.dataset_path}")
-        return load_from_disk(str(self.config.dataset_path))
+        """Load HuggingFace dataset from Hub, parquet, or local Arrow format.
+
+        Supports three loading methods:
+        1. HuggingFace Hub: if hub_id is provided
+        2. Parquet files: if dataset_path contains .parquet files or data/ subfolder
+        3. Arrow format: if dataset_path is from save_to_disk (has dataset_dict.json)
+
+        Returns:
+            DatasetDict with train/validation/test splits
+        """
+        # Priority 1: HuggingFace Hub
+        if self.config.hub_id:
+            print(f"Loading dataset from HuggingFace Hub: {self.config.hub_id}")
+            return load_dataset(self.config.hub_id)
+
+        # Priority 2: Local path
+        if not self.config.dataset_path:
+            raise ValueError("Either hub_id or dataset_path must be provided")
+
+        dataset_path = Path(self.config.dataset_path)
+        if not dataset_path.exists():
+            raise FileNotFoundError(f"Dataset path not found: {dataset_path}")
+
+        # Check if it's Arrow format (from save_to_disk)
+        if (dataset_path / "dataset_dict.json").exists():
+            print(f"Loading Arrow dataset from: {dataset_path}")
+            return load_from_disk(str(dataset_path))
+
+        # Check for parquet files in data/ subfolder (HuggingFace Hub download structure)
+        data_dir = dataset_path / "data"
+        if data_dir.exists():
+            parquet_files = list(data_dir.glob("*.parquet"))
+            if parquet_files:
+                print(f"Loading parquet dataset from: {data_dir}")
+                return self._load_parquet_splits(data_dir)
+
+        # Check for parquet files directly in the path
+        parquet_files = list(dataset_path.glob("*.parquet"))
+        if parquet_files:
+            print(f"Loading parquet dataset from: {dataset_path}")
+            return self._load_parquet_splits(dataset_path)
+
+        raise ValueError(
+            f"Could not determine dataset format at {dataset_path}. "
+            "Expected Arrow format (dataset_dict.json) or parquet files."
+        )
+
+    def _load_parquet_splits(self, parquet_dir: Path) -> DatasetDict:
+        """Load dataset splits from parquet files.
+
+        Parquet files are expected to be named like:
+        - train-00000-of-00001.parquet
+        - validation-00000-of-00001.parquet
+        - test-00000-of-00001.parquet
+
+        Args:
+            parquet_dir: Directory containing parquet files
+
+        Returns:
+            DatasetDict with available splits
+        """
+        splits = {}
+        split_names = ["train", "validation", "test"]
+
+        for split_name in split_names:
+            # Find parquet files for this split
+            split_files = list(parquet_dir.glob(f"{split_name}-*.parquet"))
+            if split_files:
+                # Load all parquet files for this split
+                file_paths = [str(f) for f in sorted(split_files)]
+                splits[split_name] = load_dataset("parquet", data_files=file_paths, split="train")
+
+        if not splits:
+            raise ValueError(f"No parquet files found in {parquet_dir}")
+
+        return DatasetDict(splits)
 
     def _process_split(
         self,

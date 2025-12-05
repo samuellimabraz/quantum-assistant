@@ -45,12 +45,15 @@ class SwiftFormatConfig(BaseModel):
 class FinetuneConfig(BaseModel):
     """Complete configuration for fine-tuning data preparation."""
 
-    # Input paths
-    dataset_path: Path = Field(
-        default=Path("outputs/final"), description="Path to HuggingFace dataset directory"
+    # Input - HuggingFace Hub or local path
+    hub_id: str | None = Field(
+        default=None, description="HuggingFace Hub dataset ID (e.g., 'samuellimabraz/quantum-test')"
     )
-    images_source_dir: Path = Field(
-        default=Path("outputs/images"), description="Source directory for images"
+    dataset_path: Path | None = Field(
+        default=None, description="Local path to dataset directory (parquet or arrow format)"
+    )
+    images_source_dir: Path | None = Field(
+        default=None, description="Source directory for images (optional)"
     )
 
     # Output paths

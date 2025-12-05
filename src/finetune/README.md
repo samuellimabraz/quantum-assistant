@@ -4,23 +4,66 @@ Prepare quantum computing datasets for VLM fine-tuning with ms-swift framework.
 
 ## Features
 
+- **Multiple Sources**: Load from HuggingFace Hub, local parquet, or Arrow format
 - **Image Processing**: Resize images maintaining aspect ratio
 - **ms-swift Format**: Convert to JSONL with proper message structure
 - **Multimodal Support**: Handle text-only and image+text samples
 - **System Prompts**: Configurable quantum computing expert prompts
-- **Split Support**: Process train/validation/test splits
 
 ## Quick Start
 
 ```bash
-# Prepare dataset with default settings
+# From HuggingFace Hub (recommended for Colab/remote)
+finetune prepare --hub-id samuellimabraz/quantum-test --output-dir ./swift_data
+
+# From local parquet (downloaded from Hub)
+finetune prepare --dataset-path /content/quantum-test --output-dir ./swift_data
+
+# From local Arrow format (from save_to_disk)
 finetune prepare --dataset-path outputs/final --output-dir outputs/finetune
+```
 
-# Use configuration file
-finetune prepare --config src/finetune/yaml/finetune_config.yaml
+## Dataset Sources
 
-# Generate default config
-finetune init-config --output my_config.yaml
+The preparer supports three dataset sources:
+
+| Source | Option | Example |
+|--------|--------|---------|
+| **HuggingFace Hub** | `--hub-id` | `samuellimabraz/quantum-test` |
+| **Local Parquet** | `--dataset-path` | `/content/quantum-test` (with `data/*.parquet`) |
+| **Local Arrow** | `--dataset-path` | `outputs/final` (from `save_to_disk`) |
+
+### HuggingFace Hub (Recommended)
+
+Best for Google Colab or remote training environments:
+
+```bash
+finetune prepare --hub-id samuellimabraz/quantum-test --output-dir ./swift_data
+```
+
+### Local Parquet
+
+For datasets downloaded from Hub with structure:
+
+```
+/content/quantum-test/
+├── data/
+│   ├── train-00000-of-00001.parquet
+│   ├── validation-00000-of-00001.parquet
+│   └── test-00000-of-00001.parquet
+└── README.md
+```
+
+```bash
+finetune prepare --dataset-path /content/quantum-test --output-dir ./swift_data
+```
+
+### Local Arrow
+
+For datasets created with `save_to_disk`:
+
+```bash
+finetune prepare --dataset-path outputs/final --output-dir outputs/finetune
 ```
 
 ## Output Format
@@ -36,29 +79,6 @@ The prepared data follows ms-swift's expected format:
     ],
     "images": ["images/circuit_abc123.jpg"]
 }
-```
-
-## Configuration
-
-Key settings in `finetune_config.yaml`:
-
-```yaml
-# Image processing
-image:
-  max_size: 640  # Maximum dimension
-  quality: 95    # JPEG quality
-  format: JPEG   # Output format
-  preserve_aspect_ratio: true
-
-# ms-swift format
-swift:
-  image_placeholder: "<image>"
-  include_system_prompt: true
-  system_prompt: "You are a quantum computing expert..."
-
-# Processing
-max_samples: null  # null for all, int for testing
-question_types: null  # Filter by type
 ```
 
 ## Output Structure
@@ -81,7 +101,8 @@ finetune prepare [OPTIONS]
 
 Options:
   -c, --config PATH          YAML configuration file
-  -d, --dataset-path PATH    HuggingFace dataset directory [default: outputs/final]
+  -h, --hub-id TEXT          HuggingFace Hub dataset ID
+  -d, --dataset-path PATH    Local path to dataset directory
   -o, --output-dir PATH      Output directory [default: outputs/finetune]
   --max-size INTEGER         Maximum image dimension [default: 640]
   --image-format [JPEG|PNG]  Output image format [default: JPEG]
@@ -95,14 +116,19 @@ Options:
 ```python
 from finetune import DatasetPreparer, FinetuneConfig
 
-# Load configuration
-config = FinetuneConfig.from_yaml("finetune_config.yaml")
-
-# Or create programmatically
+# From HuggingFace Hub
 config = FinetuneConfig(
-    dataset_path="outputs/final",
-    output_dir="outputs/finetune",
+    hub_id="samuellimabraz/quantum-test",
+    output_dir="./swift_data",
 )
+
+# Or from local path
+config = FinetuneConfig(
+    dataset_path="/content/quantum-test",
+    output_dir="./swift_data",
+)
+
+# Configure options
 config.image.max_size = 512
 config.swift.include_system_prompt = True
 
@@ -121,30 +147,32 @@ After preparing the dataset, use it with ms-swift:
 # Train with prepared data
 swift sft \
     --model_type qwen2_vl-7b-instruct \
-    --dataset outputs/finetune/train.jsonl \
-    --val_dataset outputs/finetune/validation.jsonl \
-    --output_dir outputs/models/qwen2-vl-quantum
+    --dataset ./swift_data/train.jsonl \
+    --val_dataset ./swift_data/validation.jsonl \
+    --output_dir ./models/qwen2-vl-quantum
 ```
 
-Or use YAML configuration:
+## Google Colab Example
 
-```yaml
-# swift_train.yaml
-model_type: qwen2_vl-7b-instruct
-dataset: outputs/finetune/train.jsonl
-val_dataset: outputs/finetune/validation.jsonl
-output_dir: outputs/models/qwen2-vl-quantum
+```python
+# Install dependencies
+!pip install -q datasets pillow tqdm pyyaml pydantic typer rich
+
+# Clone repo (or install package)
+!git clone https://github.com/user/quantum-assistant.git
+%cd quantum-assistant
+!pip install -e .
+
+# Prepare dataset from Hub
+!finetune prepare \
+    --hub-id samuellimabraz/quantum-test \
+    --output-dir ./swift_data \
+    --max-size 640
+
+# Train with ms-swift
+!swift sft \
+    --model_type qwen2_vl-2b-instruct \
+    --dataset ./swift_data/train.jsonl \
+    --val_dataset ./swift_data/validation.jsonl \
+    --output_dir ./outputs/qwen2-quantum
 ```
-
-## Sample Types
-
-The preparer handles all three question types:
-
-| Type | Description | Has Image |
-|------|-------------|-----------|
-| `function_completion` | Complete function body | Optional |
-| `code_generation` | Generate full code | Optional |
-| `qa` | Theory/concepts | Optional |
-
-All types support multimodal (with image) and text-only variants.
-

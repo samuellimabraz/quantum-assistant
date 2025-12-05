@@ -33,10 +33,14 @@ def prepare(
         Optional[Path],
         typer.Option("--config", "-c", help="Path to YAML configuration file"),
     ] = None,
+    hub_id: Annotated[
+        Optional[str],
+        typer.Option("--hub-id", "-h", help="HuggingFace Hub dataset ID (e.g., 'user/dataset')"),
+    ] = None,
     dataset_path: Annotated[
-        Path,
-        typer.Option("--dataset-path", "-d", help="Path to HuggingFace dataset directory"),
-    ] = Path("outputs/final"),
+        Optional[Path],
+        typer.Option("--dataset-path", "-d", help="Local path to dataset directory"),
+    ] = None,
     output_dir: Annotated[
         Path,
         typer.Option("--output-dir", "-o", help="Output directory for prepared data"),
@@ -64,22 +68,27 @@ def prepare(
 ):
     """Prepare dataset for ms-swift fine-tuning.
 
-    Converts HuggingFace dataset to ms-swift JSONL format with:
+    Supports loading from:
 
-    - Image resizing
+    - HuggingFace Hub: --hub-id samuellimabraz/quantum-test
 
-    - Proper message structure with system/user/assistant roles
+    - Local parquet: --dataset-path /content/quantum-test
 
-    - Image placeholders for multimodal samples
+    - Local Arrow: --dataset-path outputs/final
     """
     if config and config.exists():
         finetune_config = FinetuneConfig.from_yaml(config)
     else:
+        if not hub_id and not dataset_path:
+            # Default to local path for backward compatibility
+            dataset_path = Path("outputs/final")
+
         qt_list = None
         if question_types:
             qt_list = [QuestionType(qt.strip()) for qt in question_types.split(",")]
 
         finetune_config = FinetuneConfig(
+            hub_id=hub_id,
             dataset_path=dataset_path,
             output_dir=output_dir,
             max_samples=max_samples,
@@ -99,7 +108,13 @@ def prepare(
     info_table = Table(show_header=False, box=None)
     info_table.add_column("Property", style="dim")
     info_table.add_column("Value", style="green")
-    info_table.add_row("Dataset path", str(finetune_config.dataset_path))
+
+    # Show dataset source
+    if finetune_config.hub_id:
+        info_table.add_row("Dataset (Hub)", finetune_config.hub_id)
+    elif finetune_config.dataset_path:
+        info_table.add_row("Dataset (Local)", str(finetune_config.dataset_path))
+
     info_table.add_row("Output directory", str(finetune_config.output_dir))
     info_table.add_row("Image max size", str(finetune_config.image.max_size))
     info_table.add_row("Image format", finetune_config.image.format)
