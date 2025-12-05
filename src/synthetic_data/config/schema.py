@@ -173,18 +173,6 @@ class GenerationConfig(BaseModel):
         }
     )
 
-    # Over-allocation to reduce retry attempts (1.8 = generate 80% more candidates)
-    over_allocation_factor: float = Field(default=1.8, ge=1.0, le=3.0)
-
-    # Diversity weight for chunk/image selection (0 = score only, 1 = diversity only)
-    diversity_weight: float = Field(default=0.4, ge=0.0, le=1.0)
-
-    # Maximum generation attempts (reduced from 10 due to over-allocation)
-    max_generation_attempts: int = Field(default=3, ge=1, le=10)
-
-    # Keep extra samples beyond target (if True, scales up proportionally; if False, trims to exact target)
-    keep_extra_samples: bool = Field(default=True)
-
     # Legacy fields (kept for backwards compatibility)
     multimodal_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
     question_types: list[QuestionType] = Field(default_factory=lambda: list(QuestionType))

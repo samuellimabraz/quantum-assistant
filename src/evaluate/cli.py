@@ -492,7 +492,6 @@ def compare(
         if "overall" in metrics:
             metrics = metrics["overall"]
 
-        # Get dataset info
         metadata = data.get("metadata", {})
         if isinstance(metadata, dict) and "dataset" in metadata:
             dataset_name = Path(metadata["dataset"].get("path", "")).stem[:30]

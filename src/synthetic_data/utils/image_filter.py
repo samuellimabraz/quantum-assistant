@@ -1,10 +1,13 @@
 """Image quality filtering after transcription."""
 
 import asyncio
+import logging
 import re
 
 from synthetic_data.models import LLMClient, Message
 from synthetic_data.parsers.base import Document, ImageReference
+
+logger = logging.getLogger(__name__)
 
 
 class ImageQualityFilter:
@@ -15,7 +18,7 @@ class ImageQualityFilter:
         Initialize image quality filter.
 
         Args:
-            llm_client: LLM client for image quality checks
+            llm_client: LLM client for image quality checks (handles retries internally)
             max_concurrent: Maximum concurrent API requests
         """
         self.llm_client = llm_client
@@ -103,14 +106,23 @@ class ImageQualityFilter:
 
             async with semaphore:
                 try:
+                    # Client handles retries and timeout internally
                     response = await self.llm_client.generate_async(
-                        messages, max_tokens=1024, temperature=0.1
+                        messages, max_tokens=1024, temperature=0.1, request_timeout=60.0
                     )
                     passed, reason = self._parse_filter_response(response)
                     return img_ref, passed, reason
-                except Exception:  # noqa: BLE001
-                    # On error, keep the image to be safe
-                    return img_ref, True, "Error during evaluation"
+
+                except ValueError as e:
+                    # Parsing error after retries - reject image
+                    error_msg = str(e)
+                    logger.warning("Parse error for image %s: %s", img_ref.image_id, error_msg)
+                    return img_ref, False, f"Invalid response: {error_msg}"
+
+                except (asyncio.TimeoutError, Exception) as e:
+                    # Timeout or API error after retries - reject image
+                    logger.error("Error for image %s: %s", img_ref.image_id, str(e))
+                    return img_ref, False, f"Error after retries: {type(e).__name__}"
 
         # Run all checks concurrently
         tasks = [check_image(img) for img in document.images]
@@ -166,6 +178,7 @@ class ImageQualityFilter:
         progress_callback=None,
         checkpoint_callback=None,
         checkpoint_interval: int = 100,
+        skip_image_ids: set[str] | None = None,
     ) -> tuple[list[Document], list[dict]]:
         """
         Filter images across multiple documents
@@ -177,10 +190,12 @@ class ImageQualityFilter:
             progress_callback: Optional callback function(completed_image_count)
             checkpoint_callback: Optional callback function(documents, debug_info)
             checkpoint_interval: Save checkpoint every N images completed
+            skip_image_ids: Set of image IDs to skip (already processed)
 
         Returns:
             Tuple of (filtered_documents, debug_info)
         """
+        skip_image_ids = skip_image_ids or set()
         system_content = (
             system_prompt
             if system_prompt
@@ -188,10 +203,14 @@ class ImageQualityFilter:
         )
 
         # Collect all images from all documents with their document reference
+        # Skip images that were already processed
         all_items = []
         for doc_idx, doc in enumerate(documents):
             for img_idx, img_ref in enumerate(doc.images):
                 if img_ref.transcription and img_ref.resolved_path:
+                    # Skip if already processed
+                    if img_ref.image_id and img_ref.image_id in skip_image_ids:
+                        continue
                     all_items.append((doc_idx, img_idx, img_ref))
 
         if not all_items:
@@ -211,33 +230,46 @@ class ImageQualityFilter:
             """Process a single image filter check."""
             doc_idx, img_idx, img_ref = item
 
-            # Build context for quality check
-            context_parts = []
-            if img_ref.alt_text:
-                context_parts.append(f"Alt text: {img_ref.alt_text}")
-            if img_ref.caption:
-                context_parts.append(f"Caption: {img_ref.caption}")
+            # Skip if no transcription or resolved path
+            if not img_ref.transcription or not img_ref.resolved_path:
+                passed, reason = False, "No transcription or resolved path"
+            else:
+                # Build context for quality check
+                context_parts = []
+                if img_ref.alt_text:
+                    context_parts.append(f"Alt text: {img_ref.alt_text}")
+                if img_ref.caption:
+                    context_parts.append(f"Caption: {img_ref.caption}")
 
-            context = "\n".join(context_parts) if context_parts else "No additional context"
+                context = "\n".join(context_parts) if context_parts else "No additional context"
 
-            user_prompt = prompt_template.format(
-                transcription=img_ref.transcription[:2000],
-                context=context,
-            )
-
-            messages = [
-                Message(role="system", content=system_content),
-                Message(role="user", content=user_prompt),
-            ]
-
-            try:
-                response = await self.llm_client.generate_async(
-                    messages, max_tokens=1024, temperature=0.1
+                user_prompt = prompt_template.format(
+                    transcription=img_ref.transcription[:2000],
+                    context=context,
                 )
-                passed, reason = self._parse_filter_response(response)
-            except Exception:  # noqa: BLE001
-                # On error, keep the image to be safe
-                passed, reason = True, "Error during evaluation"
+
+                messages = [
+                    Message(role="system", content=system_content),
+                    Message(role="user", content=user_prompt),
+                ]
+
+                try:
+                    # Client handles retries and timeout internally
+                    response = await self.llm_client.generate_async(
+                        messages, max_tokens=1024, temperature=0.1, request_timeout=60.0
+                    )
+                    passed, reason = self._parse_filter_response(response)
+
+                except ValueError as e:
+                    # Parsing error after retries - reject image
+                    error_msg = str(e)
+                    logger.warning("Parse error for image %s: %s", img_ref.image_id, error_msg)
+                    passed, reason = False, f"Invalid response: {error_msg}"
+
+                except (asyncio.TimeoutError, Exception) as e:
+                    # Timeout or API error after retries - reject image
+                    logger.error("Error for image %s: %s", img_ref.image_id, str(e))
+                    passed, reason = False, f"Error after retries: {type(e).__name__}"
 
             debug_entry = {
                 "image_id": img_ref.image_id,
@@ -263,7 +295,9 @@ class ImageQualityFilter:
                     completed_count[0] - last_checkpoint[0] >= checkpoint_interval
                 ):
                     # Build partial filtered documents for checkpoint
-                    partial_docs = self._build_filtered_documents(documents, filter_results)
+                    partial_docs = self._build_filtered_documents(
+                        documents, filter_results, skip_image_ids
+                    )
                     checkpoint_callback(partial_docs, all_debug_info)
                     last_checkpoint[0] = completed_count[0]
 
@@ -273,12 +307,18 @@ class ImageQualityFilter:
             async with semaphore:
                 await process_one(item)
 
-        # Process all images concurrently
+        # Process all images concurrently with timeout protection
         tasks = [process_with_limit(item) for item in all_items]
-        await asyncio.gather(*tasks)
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logger.error("Error in batch processing: %s", str(e))
+            # Continue to build results from what we have
 
         # Build final filtered documents
-        filtered_documents = self._build_filtered_documents(documents, filter_results)
+        filtered_documents = self._build_filtered_documents(
+            documents, filter_results, skip_image_ids
+        )
 
         # Final checkpoint
         if checkpoint_callback:
@@ -304,12 +344,14 @@ class ImageQualityFilter:
         self,
         documents: list[Document],
         filter_results: dict[tuple[int, int], tuple[bool, str, dict]],
+        skip_image_ids: set[str],
     ) -> list[Document]:
         """Build filtered documents based on filter results.
 
         Args:
             documents: Original documents
             filter_results: Dict of (doc_idx, img_idx) -> (passed, reason, debug_entry)
+            skip_image_ids: Set of image IDs that were already processed (keep as-is)
 
         Returns:
             List of filtered documents with rejected images removed
@@ -323,14 +365,17 @@ class ImageQualityFilter:
             for img_idx, img_ref in enumerate(doc.images):
                 key = (doc_idx, img_idx)
                 if key in filter_results:
+                    # Newly processed in this run
                     passed, _, _ = filter_results[key]
                     if passed:
                         passed_images.append(img_ref)
                     else:
                         removed_images.append(img_ref)
+                elif img_ref.image_id and img_ref.image_id in skip_image_ids:
+                    # Already processed in previous run - keep it
+                    passed_images.append(img_ref)
                 else:
                     # Image wasn't processed (no transcription/path) - remove it
-                    # Unresolved images should not be kept in the filtered output
                     removed_images.append(img_ref)
 
             # Remove image markers from content for rejected images
@@ -358,71 +403,69 @@ class ImageQualityFilter:
 
     def _parse_filter_response(self, response: str) -> tuple[bool, str]:
         """
-        Parse filter response with robust handling of various formats.
+        Parse filter response in expected format: DECISION: yes/no\\nREASON: explanation
 
         Args:
-            response: Model response (may vary in format)
+            response: Model response
 
         Returns:
             Tuple of (passed, reason)
+
+        Raises:
+            ValueError: If response format is invalid
         """
         response = response.strip()
-        response_lower = response.lower()
+        if not response:
+            logger.warning("Received empty response from model")
+            raise ValueError("Empty response from model")
+
+        lines = [line.strip() for line in response.split("\n") if line.strip()]
 
         decision = None
-        reason = "No reason provided"
+        reason = None
 
-        # Try structured format: "DECISION: yes/no\nREASON: ..."
-        lines = response.split("\n")
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            line_lower = line_stripped.lower()
+        # Parse each line looking for DECISION and REASON
+        for line in lines:
+            line_lower = line.lower()
 
-            if "decision" in line_lower or "dec" in line_lower:
-                # Extract decision value after colon or space
-                if ":" in line_stripped:
-                    decision_text = line_stripped.split(":", 1)[1].strip().lower()
-                else:
-                    # No colon - try to extract yes/no from line
-                    decision_text = line_stripped.lower()
+            # Match "DECISION: yes/no" or "Decision: yes/no"
+            if line_lower.startswith("decision:") or line_lower.startswith("dec:"):
+                decision_value = line.split(":", 1)[1].strip().lower()
+                if "yes" in decision_value:
+                    decision = True
+                elif "no" in decision_value:
+                    decision = False
 
-                # Look for yes/no in the decision text
-                if "yes" in decision_text:
-                    decision = "yes"
-                elif "no" in decision_text:
-                    decision = "no"
+            # Match "REASON: explanation" or "Reason: explanation"
+            elif line_lower.startswith("reason:"):
+                reason = line.split(":", 1)[1].strip()
+                # Remove any remaining prefix artifacts
+                if reason and not reason[0].isalnum():
+                    reason = reason.lstrip(":- ")
 
-            # Look for reason
-            elif "reason" in line_lower:
-                if ":" in line_stripped:
-                    reason = line_stripped.split(":", 1)[1].strip()
-                else:
-                    # Reason might be on next line
-                    if i + 1 < len(lines):
-                        reason = lines[i + 1].strip()
-
-        # Fallback 1: Check if entire response starts with yes/no
+        # Validation
         if decision is None:
-            if response_lower.startswith("yes"):
-                decision = "yes"
-            elif response_lower.startswith("no"):
-                decision = "no"
+            # Try simple yes/no at start of response
+            first_word = lines[0].lower().split()[0] if lines else ""
+            if first_word == "yes":
+                decision = True
+                reason = response if not reason else reason
+            elif first_word == "no":
+                decision = False
+                reason = response if not reason else reason
+            else:
+                logger.warning(
+                    "Could not parse decision from response. First 200 chars: %s", response[:200]
+                )
+                raise ValueError(f"Could not parse decision from response: {response[:200]}")
 
-        # Fallback 2: Search for yes/no anywhere in response
-        if decision is None:
-            # Count occurrences
-            yes_count = response_lower.count("yes")
-            no_count = response_lower.count("no")
+        if not reason or len(reason.strip()) < 3:
+            # Extract full response as reason if not found
+            reason = (
+                " ".join(lines[1:])
+                if len(lines) > 1
+                else "Model provided decision without explanation"
+            )
+            logger.debug("Reason not found in expected format, using fallback: %s", reason[:100])
 
-            if yes_count > no_count:
-                decision = "yes"
-            elif no_count > yes_count:
-                decision = "no"
-
-        # Default to "no" (reject) if still unclear
-        if decision is None:
-            decision = "no"
-            reason = "Unclear response format"
-
-        passed = decision == "yes"
-        return passed, reason
+        return decision, reason

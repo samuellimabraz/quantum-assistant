@@ -1,8 +1,6 @@
 """Model client implementations with async batch support and optimized parallelization."""
 
 import asyncio
-import base64
-import io
 import os
 import subprocess
 import sys
@@ -13,25 +11,17 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-
 Image.MAX_IMAGE_PIXELS = 500_000_000
-
-MAX_PROCESSABLE_PIXELS = 30_000_000  
 
 
 class ImageProcessingTimeout(Exception):
     """Raised when image processing times out."""
 
-    pass
 
-
-# macOS: Automatically configure library paths if using Homebrew
 if sys.platform == "darwin":
-    # Configure ImageMagick for Wand
     if "MAGICK_HOME" not in os.environ:
         os.environ["MAGICK_HOME"] = "/opt/homebrew"
 
-    # Configure cairo library path
     try:
         cairo_path = (
             subprocess.check_output(["brew", "--prefix", "cairo"], stderr=subprocess.DEVNULL)
@@ -46,7 +36,6 @@ if sys.platform == "darwin":
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
-# Shared thread pool for CPU-bound image processing
 _image_executor: ThreadPoolExecutor | None = None
 
 
@@ -54,7 +43,6 @@ def get_image_executor() -> ThreadPoolExecutor:
     """Get or create shared thread pool for image processing."""
     global _image_executor
     if _image_executor is None:
-        # Use CPU count for image processing threads
         _image_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
     return _image_executor
 
@@ -183,32 +171,71 @@ class LLMClient:
         messages: list[Message],
         max_tokens: int | None = None,
         temperature: float | None = None,
+        request_timeout: float | None = None,
     ) -> str:
-        """Generate text completion asynchronously with retry logic."""
+        """
+        Generate text completion asynchronously with retry and timeout logic.
+
+        Args:
+            messages: Chat messages
+            max_tokens: Override max tokens
+            temperature: Override temperature
+            request_timeout: Timeout per request in seconds (uses instance timeout if None)
+
+        Returns:
+            Generated text response
+
+        Raises:
+            httpx.HTTPStatusError: On HTTP errors after retries
+            httpx.RequestError: On network errors after retries
+            asyncio.TimeoutError: On timeout after retries
+            ValueError: On empty response after retries
+        """
         self._ensure_async_client()
 
         url = f"{self.base_url}/chat/completions"
-
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         payload = self._build_payload(messages, max_tokens, temperature)
+        timeout = request_timeout or self.timeout
 
-        last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = await self.async_client.post(url, json=payload, headers=headers)
+                # Make request with timeout
+                response = await asyncio.wait_for(
+                    self.async_client.post(url, json=payload, headers=headers),
+                    timeout=timeout,
+                )
                 response.raise_for_status()
                 result = response.json()
-                return result["choices"][0]["message"]["content"]
-            except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                last_error = e
+                content = result["choices"][0]["message"]["content"]
+
+                # Validate response is not empty
+                if not content or not content.strip():
+                    raise ValueError("Empty response from model")
+
+                return content
+
+            except asyncio.TimeoutError:
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2**attempt)  # Exponential backoff
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
                 else:
-                    raise last_error
+                    raise
+
+            except ValueError as e:
+                # Empty response - retry
+                if "Empty response" in str(e) and attempt < self.max_retries - 1:
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
+                else:
+                    raise
+
+            except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                if attempt < self.max_retries - 1:
+                    await asyncio.sleep(self.retry_delay * (2**attempt))
+                else:
+                    raise
 
     async def generate_batch_async(
         self,
@@ -293,161 +320,74 @@ class LLMClient:
 
 
 class VLMClient(LLMClient):
-    """Client for vision-language models with async batch support and optimized parallelization."""
+    """Client for vision-language models with async batch support."""
 
-    def _process_image(self, image_path: Path | str, save_debug: bool = False) -> str:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str = "",
+        model_name: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        timeout: float = 300.0,
+        max_retries: int = 5,
+        retry_delay: float = 1.0,
+        service_tier: str | None = "auto",
+        max_connections: int = 100,
+        top_p: float | None = None,
+        min_p: float | None = None,
+        top_k: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        repetition_penalty: float | None = None,
+        max_dimension: int = 640,
+    ):
+        """Initialize VLM client.
+
+        Args:
+            max_dimension: Maximum image dimension (default 640 for VLM inference)
+            Other args: See LLMClient
         """
-        Process image to base64 JPEG (CPU-bound, run in thread pool for async).
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            service_tier=service_tier,
+            max_connections=max_connections,
+            top_p=top_p,
+            min_p=min_p,
+            top_k=top_k,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+        )
+        self.max_dimension = max_dimension
+        self._image_loader = None
+
+    @property
+    def image_loader(self):
+        """Lazy-load ImageLoader to avoid circular imports."""
+        if self._image_loader is None:
+            from synthetic_data.utils.image_converter import ImageLoader
+
+            self._image_loader = ImageLoader(max_dimension=self.max_dimension)
+        return self._image_loader
+
+    def _process_image(self, image_path: Path | str) -> str:
+        """Process image to base64 JPEG using ImageLoader.
 
         Args:
             image_path: Path to image file
-            save_debug: If True, save converted image for debugging
 
         Returns:
             Base64 encoded JPEG image
-
-        Raises:
-            ValueError: If image is too large to process
-            FileNotFoundError: If image file doesn't exist
-            RuntimeError: If image processing fails
         """
-        image_path = Path(image_path)
-
-        if not image_path.exists():
-            raise FileNotFoundError(f"Image not found: {image_path}")
-
-        img = None
-        suffix = image_path.suffix.lower()
-
-        try:
-            if suffix == ".svg":
-                img = self._load_svg_image(image_path)
-            elif suffix == ".avif":
-                img = self._load_avif_image(image_path)
-            else:
-                img = Image.open(image_path)
-
-            total_pixels = img.width * img.height
-            if total_pixels > MAX_PROCESSABLE_PIXELS:
-                raise ValueError(
-                    f"Image too large: {img.width}x{img.height} ({total_pixels/1e6:.1f}M pixels). "
-                    f"Max: {MAX_PROCESSABLE_PIXELS/1e6:.0f}M pixels"
-                )
-
-            # Resize to target dimension
-            max_dimension = 640
-            if img.width > max_dimension or img.height > max_dimension:
-                ratio = min(max_dimension / img.width, max_dimension / img.height)
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
-
-            # Convert to RGB
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-            elif img.mode == "RGBA":
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])
-                img = background
-
-            if save_debug:
-                debug_dir = Path("outputs/vlm_debug")
-                debug_dir.mkdir(parents=True, exist_ok=True)
-                debug_path = debug_dir / f"{image_path.stem}_processed.jpg"
-                img.save(debug_path, format="JPEG", quality=95)
-                print(f"  [Debug] Saved processed image: {debug_path}")
-
-            # Encode to base64
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=95, optimize=True)
-            image_data = base64.b64encode(buffer.getvalue()).decode()
-
-            return image_data
-
-        finally:
-            if img is not None:
-                try:
-                    img.close()
-                except Exception:
-                    pass
-
-    def _load_svg_image(self, image_path: Path) -> Image.Image:
-        """Load SVG image using Wand/ImageMagick."""
-        try:
-            from wand.image import Image as WandImage
-            from wand.color import Color
-
-            with WandImage(filename=str(image_path), resolution=300) as wand_img:
-                if wand_img.width * wand_img.height > MAX_PROCESSABLE_PIXELS:
-                    raise ValueError(f"SVG too large: {wand_img.width}x{wand_img.height}")
-
-                wand_img.background_color = Color("white")
-                wand_img.alpha_channel = "remove"
-                wand_img.format = "png"
-                png_blob = wand_img.make_blob("png")
-
-            return Image.open(io.BytesIO(png_blob))
-
-        except ImportError:
-            raise ImportError(
-                "Wand required for SVG. Install with: pip install Wand\n"
-                "Also requires ImageMagick: brew install imagemagick (Mac) "
-                "or apt-get install libmagickwand-dev (Linux)"
-            )
-
-    def _load_avif_image(self, image_path: Path) -> Image.Image:
-        """Load AVIF image with PIL fallback to Wand.
-
-        For large images that PIL can't handle, uses Wand to resize first.
-        """
-        try:
-            import pillow_avif 
-
-            img = Image.open(image_path)
-            img.load()
-            return img
-        except ImportError:
-            pass
-        except Exception:
-            pass
-
-        try:
-            from wand.image import Image as WandImage
-            from wand.color import Color
-
-            with WandImage(filename=str(image_path)) as wand_img:
-                total_pixels = wand_img.width * wand_img.height
-
-                if total_pixels > MAX_PROCESSABLE_PIXELS:
-                    raise ValueError(
-                        f"AVIF too large: {wand_img.width}x{wand_img.height} "
-                        f"({total_pixels/1e6:.1f}M pixels)"
-                    )
-
-                # For large-ish images, resize in Wand first (faster than PIL resize)
-                if total_pixels > 2_000_000:  # > 2MP
-                    # Resize to max 1024px dimension for faster processing
-                    max_dim = 1024
-                    if wand_img.width > max_dim or wand_img.height > max_dim:
-                        ratio = min(max_dim / wand_img.width, max_dim / wand_img.height)
-                        new_width = int(wand_img.width * ratio)
-                        new_height = int(wand_img.height * ratio)
-                        wand_img.resize(new_width, new_height)
-
-                wand_img.background_color = Color("white")
-                wand_img.alpha_channel = "remove"
-                wand_img.format = "png"
-                png_blob = wand_img.make_blob("png")
-
-            return Image.open(io.BytesIO(png_blob))
-
-        except ImportError:
-            raise ImportError(
-                "Neither pillow-avif nor Wand could load AVIF. Install with:\n"
-                "  pip install pillow-avif  # or\n"
-                "  pip install Wand && brew install imagemagick"
-            )
-        except ValueError:
-            raise
+        return self.image_loader.load_as_base64(image_path, output_format="JPEG", quality=95)
 
     async def _process_image_async(self, image_path: Path | str, timeout: float = 120.0) -> str:
         """Process image asynchronously using thread pool with timeout.
@@ -470,10 +410,10 @@ class VLMClient(LLMClient):
                 loop.run_in_executor(get_image_executor(), self._process_image, image_path),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             raise ImageProcessingTimeout(
                 f"Image processing timed out after {timeout}s: {image_path}"
-            )
+            ) from exc
 
     def generate_with_image(
         self,
@@ -482,10 +422,20 @@ class VLMClient(LLMClient):
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-        save_debug: bool = False,
     ) -> str:
-        """Generate text completion with image input."""
-        image_data = self._process_image(image_path, save_debug=save_debug)
+        """Generate text completion with image input.
+
+        Args:
+            text: Text prompt
+            image_path: Path to image file
+            system_prompt: Optional system prompt
+            max_tokens: Override max tokens
+            temperature: Override temperature
+
+        Returns:
+            Generated text response
+        """
+        image_data = self._process_image(image_path)
 
         messages = []
         if system_prompt:
@@ -513,7 +463,6 @@ class VLMClient(LLMClient):
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
-        save_debug: bool = False,
         image_data: str | None = None,
     ) -> str:
         """Generate text completion with image input asynchronously.
@@ -524,10 +473,11 @@ class VLMClient(LLMClient):
             system_prompt: Optional system prompt
             max_tokens: Override max tokens
             temperature: Override temperature
-            save_debug: Save processed image for debugging
             image_data: Pre-processed base64 image data (skip processing if provided)
+
+        Returns:
+            Generated text response
         """
-        # Use pre-processed image data or process async
         if image_data is None:
             image_data = await self._process_image_async(image_path)
 

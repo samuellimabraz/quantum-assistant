@@ -121,6 +121,7 @@ class ImageTranscriber:
         progress_callback=None,
         checkpoint_callback=None,
         checkpoint_interval: int = 50,
+        skip_image_ids: set[str] | None = None,
     ) -> None:
         """
         Transcribe images across multiple documents with full parallelization.
@@ -128,21 +129,28 @@ class ImageTranscriber:
         Uses pipelined processing:
         - All images are processed and API calls made concurrently
         - Checkpoints are saved periodically based on completed count
+        - Skips images already transcribed in previous runs
 
         Args:
             documents: List of documents with images to transcribe
             progress_callback: Optional callback function(completed_count) for progress tracking
             checkpoint_callback: Optional callback function(documents) for checkpoint saving
             checkpoint_interval: Save checkpoint every N images completed
+            skip_image_ids: Set of image IDs to skip (already transcribed)
         """
+        skip_image_ids = skip_image_ids or set()
+        
         # Collect all images from all documents
         all_items = []
 
         for doc in documents:
-            images_to_transcribe = [
-                img for img in doc.images if img.resolved_path and not img.transcription
-            ]
-            for img_ref in images_to_transcribe:
+            for img_ref in doc.images:
+                # Skip if already transcribed or in skip set
+                if img_ref.transcription or (img_ref.image_id and img_ref.image_id in skip_image_ids):
+                    continue
+                if not img_ref.resolved_path:
+                    continue
+                    
                 try:
                     prompt = self._prepare_prompt(img_ref)
                     image_path = Path(img_ref.resolved_path).resolve()
@@ -257,7 +265,7 @@ class ImageTranscriber:
         # Code context - critical for images that are outputs of code execution
         # This helps the transcriber understand what the visualization represents
         if hasattr(img_ref, "code_context") and img_ref.code_context:
-            code_preview = img_ref.code_context[:800]
+            code_preview = img_ref.code_context[:2000]
             context_parts.append(
                 f"Code that may have generated this image:\n```python\n{code_preview}\n```"
             )

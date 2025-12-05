@@ -25,7 +25,12 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from synthetic_data.config import PipelineConfig
-from synthetic_data.dataset import DatasetAnalyzer, DatasetBuilder, DatasetPlotter, HuggingFaceExporter
+from synthetic_data.dataset import (
+    DatasetAnalyzer,
+    DatasetBuilder,
+    DatasetPlotter,
+    HuggingFaceExporter,
+)
 from synthetic_data.extractors import ContentChunker, DocumentIngestion, ImageTranscriber
 from synthetic_data.generators import GenerationPipeline
 from synthetic_data.models import ModelRegistry
@@ -238,7 +243,7 @@ def _associate_code_context_with_images(documents: list) -> int:
                 # Use the closest (last) code block before the image
                 last_code = code_matches[-1].group(1).strip()
                 if last_code and len(last_code) > 20:  # Skip trivial code
-                    img.code_context = last_code[:1000]  # Limit size
+                    img.code_context = last_code[:2000]  # Limit size
                     code_context_count += 1
             else:
                 # Fallback: use the most recent code block from doc.code_blocks
@@ -259,7 +264,7 @@ def _associate_code_context_with_images(documents: list) -> int:
 
                 for code_block in reversed(doc.code_blocks):
                     if any(kw in code_block.lower() for kw in relevant_keywords):
-                        img.code_context = code_block[:1000]
+                        img.code_context = code_block[:2000]
                         code_context_count += 1
                         break
 
@@ -314,24 +319,23 @@ def transcribe(
         console.print("[yellow]Use --no-cache to re-transcribe[/yellow]")
         return
 
+    transcribed_image_ids = set()
     if not no_cache and checkpoint_manager.exists():
         checkpoint_data = checkpoint_manager.load_checkpoint()
         if checkpoint_data:
-            all_documents, _ = checkpoint_data
-            already_transcribed = sum(
-                1 for doc in all_documents for img in doc.images if img.transcription
-            )
-            if already_transcribed > 0:
+            all_documents, metadata = checkpoint_data
+            transcribed_image_ids = set(metadata.get("transcribed_image_ids", []))
+            if transcribed_image_ids:
                 console.print(
                     f"[cyan]Resuming from checkpoint: "
-                    f"{already_transcribed} images already transcribed[/cyan]"
+                    f"{len(transcribed_image_ids)} images already transcribed[/cyan]"
                 )
 
     images_to_transcribe = sum(
         1
         for doc in all_documents
         for img in doc.images
-        if img.resolved_path and not img.transcription
+        if img.resolved_path and img.image_id not in transcribed_image_ids
     )
 
     if images_to_transcribe == 0:
@@ -365,12 +369,15 @@ def transcribe(
             progress.update(task, completed=already_transcribed + completed)
 
         def save_checkpoint(documents):
-            transcribed_count = sum(
-                1 for doc in documents for img in doc.images if img.transcription
-            )
+            current_transcribed = {
+                img.image_id
+                for doc in documents
+                for img in doc.images
+                if img.image_id and img.transcription
+            }
             metadata = {
-                "transcribed_count": transcribed_count,
-                "total_images": images_to_transcribe + already_transcribed,
+                "transcribed_image_ids": list(current_transcribed),
+                "total_images": len(current_transcribed),
             }
             checkpoint_manager.save_checkpoint(documents, metadata)
 
@@ -391,6 +398,7 @@ def transcribe(
                         progress_callback=update_progress,
                         checkpoint_callback=save_checkpoint,
                         checkpoint_interval=config.generation.vlm_batch_size,
+                        skip_image_ids=transcribed_image_ids,
                     )
                 )
 
@@ -517,22 +525,25 @@ def filter_images(
         return
 
     # Try to resume from checkpoint
-    already_filtered = 0
+    processed_image_ids = set()
     if not no_cache and checkpoint_manager.exists():
         checkpoint_data = checkpoint_manager.load_checkpoint()
         if checkpoint_data:
             checkpoint_docs, metadata = checkpoint_data
-            already_filtered = metadata.get("filtered_count", 0)
-            if already_filtered > 0:
+            processed_image_ids = set(metadata.get("processed_image_ids", []))
+            if processed_image_ids:
                 console.print(
                     f"[cyan]Resuming from checkpoint: "
-                    f"{already_filtered} images already filtered[/cyan]"
+                    f"{len(processed_image_ids)} images already filtered[/cyan]"
                 )
                 all_documents = checkpoint_docs
 
-    # Count images to filter (excluding already filtered ones from checkpoint)
+    # Count images to filter (excluding already processed)
     images_to_filter = sum(
-        1 for doc in all_documents for img in doc.images if img.transcription and img.resolved_path
+        1
+        for doc in all_documents
+        for img in doc.images
+        if img.transcription and img.resolved_path and img.image_id not in processed_image_ids
     )
 
     if images_to_filter == 0:
@@ -558,15 +569,16 @@ def filter_images(
             progress.update(task, completed=completed_images)
 
         def save_checkpoint(documents, debug_info):
-            filtered_count = sum(
-                1
+            # Track which images have been processed
+            current_processed = {
+                img.image_id
                 for doc in documents
                 for img in doc.images
-                if img.transcription and img.resolved_path
-            )
+                if img.image_id and img.transcription and img.resolved_path
+            }
             metadata = {
-                "filtered_count": filtered_count,
-                "total_images": images_to_filter,
+                "processed_image_ids": list(current_processed),
+                "total_images": len(current_processed),
                 "debug_entries": len(debug_info),
             }
             checkpoint_manager.save_checkpoint(documents, metadata)
@@ -587,6 +599,7 @@ def filter_images(
                         progress_callback=update_progress,
                         checkpoint_callback=save_checkpoint,
                         checkpoint_interval=config.generation.llm_batch_size,
+                        skip_image_ids=processed_image_ids,
                     )
                 )
             except Exception as e:
@@ -947,10 +960,30 @@ def filter_quality(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / "chunks.pkl"
 
+    # Setup checkpoint manager
+    checkpoint_dir = output_dir.parent / ".checkpoints"
+    checkpoint_manager = CheckpointManager(checkpoint_dir, "filter_chunks")
+
     if output_file.exists() and not no_cache:
         console.print(f"[cyan]Filtered chunks already exist: {output_file}[/cyan]")
         console.print("[yellow]Use --no-cache to re-filter[/yellow]")
         return
+
+    # Try to resume from checkpoint
+    processed_chunk_ids = set()
+    filter_results_cache = {}
+    if not no_cache and checkpoint_manager.exists():
+        checkpoint_data = checkpoint_manager.load_checkpoint()
+        if checkpoint_data:
+            results_data, metadata = checkpoint_data
+            processed_chunk_ids = set(metadata.get("processed_chunk_ids", []))
+            # Restore filter results for processed chunks
+            filter_results_cache = metadata.get("filter_results", {})
+            if processed_chunk_ids:
+                console.print(
+                    f"[cyan]Resuming from checkpoint: "
+                    f"{len(processed_chunk_ids)} chunks already filtered[/cyan]"
+                )
 
     with Progress(
         SpinnerColumn(),
@@ -964,6 +997,18 @@ def filter_quality(
 
         def update_progress(completed):
             progress.update(task, completed=completed)
+
+        def save_checkpoint(results, debug_info):
+            # Track which chunks have been processed
+            current_processed = {chunk.chunk_id for chunk, _ in results}
+            # Store filter decisions for processed chunks
+            filter_decisions = {chunk.chunk_id: passed for chunk, passed in results}
+            metadata = {
+                "processed_chunk_ids": list(current_processed),
+                "filter_results": filter_decisions,
+                "total_chunks": len(current_processed),
+            }
+            checkpoint_manager.save_checkpoint(results, metadata)
 
         with ModelRegistry(config.models) as model_registry:
             filter_model_name = config.generation.filter_model or config.generation.curate_model
@@ -979,14 +1024,22 @@ def filter_quality(
                         batch_size=config.generation.llm_batch_size,
                         max_concurrent=config.generation.llm_concurrency,
                         progress_callback=update_progress,
+                        checkpoint_callback=save_checkpoint,
+                        checkpoint_interval=config.generation.llm_batch_size,
+                        skip_chunk_ids=processed_chunk_ids,
+                        cached_results=filter_results_cache,
                         save_debug=True,
                     )
                 )
             except Exception as e:
                 console.print(f"[red]✗ Filtering failed: {e}[/red]")
+                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
                 raise
 
     filtered_chunks = [chunk for chunk, passed in filter_results if passed]
+
+    # Clear checkpoint after successful completion
+    checkpoint_manager.clear_checkpoint()
 
     # Save detailed filter decisions
     debug_file = output_dir / "filter_decisions.jsonl"
@@ -1151,7 +1204,9 @@ def generate(
     over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
     diversity = getattr(config.generation, "diversity_weight", 0.4)
     max_attempts = getattr(config.generation, "max_generation_attempts", 3)
-    console.print(f"[cyan]Over-allocation: {over_alloc}x | Diversity weight: {diversity} | Max attempts: {max_attempts}[/cyan]")
+    console.print(
+        f"[cyan]Over-allocation: {over_alloc}x | Diversity weight: {diversity} | Max attempts: {max_attempts}[/cyan]"
+    )
 
     output_dir = Path(config.dataset.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1798,7 +1853,9 @@ def _display_analysis_summary(stats, console):
     overview_table.add_row("Text-only", f"{aggregated['text_only']:,}")
     overview_table.add_row("With Tests", f"{aggregated['with_tests']:,}")
 
-    multimodal_ratio = aggregated["multimodal"] / stats.total_samples * 100 if stats.total_samples > 0 else 0
+    multimodal_ratio = (
+        aggregated["multimodal"] / stats.total_samples * 100 if stats.total_samples > 0 else 0
+    )
     overview_table.add_row("Multimodal %", f"{multimodal_ratio:.1f}%")
 
     console.print("\n")
@@ -1846,7 +1903,9 @@ def _display_analysis_summary(stats, console):
         cat_table.add_column("Count", style="green", justify="right")
         cat_table.add_column("%", style="magenta", justify="right")
 
-        for cat, count in sorted(aggregated["by_category"].items(), key=lambda x: x[1], reverse=True):
+        for cat, count in sorted(
+            aggregated["by_category"].items(), key=lambda x: x[1], reverse=True
+        ):
             pct = count / stats.total_samples * 100 if stats.total_samples > 0 else 0
             cat_table.add_row(cat, f"{count:,}", f"{pct:.1f}%")
 
@@ -2190,8 +2249,23 @@ def pipeline(
     # Add analysis step if not skipped
     if not skip_analysis:
         # Analysis pushes to hub if hub_id provided
+        # Capture variables to avoid closure issues with lambdas
+        _hub_id = hub_id
+        _token = token
         steps.append(
-            ("Analyze", lambda: analyze(config_path, "splits", None, False, hub_id, token))
+            (
+                "Analyze",
+                lambda: analyze(
+                    config_path=config_path,
+                    source="splits",
+                    output_dir=None,
+                    no_plots=False,
+                    include_allocation=True,
+                    include_pipeline=True,
+                    hub_id=_hub_id,
+                    token=_token,
+                ),
+            )
         )
 
     for i, (step_name, step_func) in enumerate(steps, 1):
@@ -2274,8 +2348,12 @@ def analyze_allocation(
 
     console.print(f"\n[bold]Chunk Analysis:[/bold]")
     console.print(f"  Total: {analysis.total_chunks:,}")
-    console.print(f"  Multimodal: {analysis.multimodal_chunks:,} ({analysis.multimodal_chunks/analysis.total_chunks*100:.1f}%)")
-    console.print(f"  With code: {analysis.chunks_with_code:,} ({analysis.chunks_with_code/analysis.total_chunks*100:.1f}%)")
+    console.print(
+        f"  Multimodal: {analysis.multimodal_chunks:,} ({analysis.multimodal_chunks/analysis.total_chunks*100:.1f}%)"
+    )
+    console.print(
+        f"  With code: {analysis.chunks_with_code:,} ({analysis.chunks_with_code/analysis.total_chunks*100:.1f}%)"
+    )
     console.print(f"  Unique images: {analysis.unique_images:,}")
 
     # Run simulations
@@ -2294,7 +2372,8 @@ def analyze_allocation(
         over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
         div_weight = getattr(config.generation, "diversity_weight", 0.4)
         current_sim = simulator.simulate(
-            target, type_configs,
+            target,
+            type_configs,
             over_allocation_factor=over_alloc,
             diversity_weight=div_weight,
             config_name="current",

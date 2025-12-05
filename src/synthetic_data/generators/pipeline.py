@@ -903,20 +903,53 @@ class GenerationPipeline:
         return samples
 
     def _parse_curation_response(self, response: str) -> tuple[str, str]:
-        """Parse curation response."""
-        response_upper = response.strip().upper()
+        """
+        Parse curation response in expected format.
 
-        if "PASS" in response_upper or response_upper.startswith("YES"):
-            return "PASS", ""
+        Returns:
+            Tuple of (decision, reason) where decision is "PASS" or "REJECT"
+        """
+        response = response.strip()
+        if not response:
+            return "REJECT", "Empty response from model"
 
-        reason = "Quality check failed"
-        lines = response.split("\n")
+        lines = [line.strip() for line in response.split("\n") if line.strip()]
+
+        decision = None
+        reason = ""
+
+        # Parse each line looking for DECISION and REASON
         for line in lines:
-            if "REASON" in line.upper() and ":" in line:
-                reason = line.split(":", 1)[1].strip()
-                break
+            line_upper = line.upper()
 
-        return "REJECT", reason
+            # Match "DECISION: PASS/REJECT"
+            if line_upper.startswith("DECISION:") or line_upper.startswith("DEC:"):
+                decision_value = line.split(":", 1)[1].strip().upper()
+                if "PASS" in decision_value:
+                    decision = "PASS"
+                elif "REJECT" in decision_value:
+                    decision = "REJECT"
+
+            # Match "REASON: explanation"
+            elif line_upper.startswith("REASON:"):
+                reason = line.split(":", 1)[1].strip()
+
+        # Fallback: check for PASS/REJECT anywhere
+        if decision is None:
+            first_word = lines[0].upper().split()[0] if lines else ""
+            if "PASS" in first_word:
+                decision = "PASS"
+            elif "REJECT" in first_word:
+                decision = "REJECT"
+            else:
+                # Default to REJECT on unclear format
+                decision = "REJECT"
+                reason = f"Unclear response format: {response[:100]}"
+
+        if decision == "REJECT" and not reason:
+            reason = "Quality check failed (no reason provided)"
+
+        return decision, reason
 
     def _save_checkpoint(
         self,

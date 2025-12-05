@@ -3,10 +3,10 @@
 from pathlib import Path
 
 from datasets import Dataset, DatasetDict, Features, Image, Value
-from PIL import Image as PILImage
 
 from synthetic_data.config import DatasetConfig
 from synthetic_data.models.types import Sample
+from synthetic_data.utils.image_converter import ImageLoader
 
 
 class HuggingFaceExporter:
@@ -30,6 +30,7 @@ class HuggingFaceExporter:
             config: Dataset configuration
         """
         self.config = config
+        self.image_loader = ImageLoader(max_dimension=1024)
 
     def export(
         self,
@@ -209,47 +210,22 @@ class HuggingFaceExporter:
         return None
 
     def _load_and_convert_image(self, image_path: Path):
-        """Load an image and convert to PIL Image in standard format."""
-        import io
+        """Load an image and convert to PIL Image in standard format.
 
+        Uses ImageLoader which handles SVG conversion with CairoSVG (preferred)
+        or Wand as fallback for proper rendering of complex SVG elements.
+        """
         try:
-            if image_path.suffix.lower() == ".svg":
-                try:
-                    from wand.image import Image as WandImage
-                    from wand.color import Color
-
-                    with WandImage(filename=str(image_path), resolution=300) as wand_img:
-                        wand_img.background_color = Color("white")
-                        wand_img.alpha_channel = "remove"
-                        wand_img.format = "png"
-                        png_blob = wand_img.make_blob("png")
-                        img = PILImage.open(io.BytesIO(png_blob))
-                except ImportError:
-                    print(f"Warning: Wand not available for SVG {image_path}")
-                    return None
-            else:
-                if str(image_path).lower().endswith(".avif"):
-                    try:
-                        import pillow_avif  # noqa: F401
-                    except ImportError:
-                        print(f"Warning: pillow-avif not available for {image_path}")
-                        return None
-                img = PILImage.open(image_path)
-
-            if img.mode not in ("RGB", "L"):
-                if img.mode == "RGBA":
-                    rgb_img = PILImage.new("RGB", img.size, (255, 255, 255))
-                    rgb_img.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                    img = rgb_img
-                else:
-                    img = img.convert("RGB")
-
-            max_size = 1024
-            if img.width > max_size or img.height > max_size:
-                img.thumbnail((max_size, max_size), PILImage.Resampling.LANCZOS)
-
-            return img.copy()
-
+            return self.image_loader.load(image_path)
+        except FileNotFoundError:
+            print(f"Warning: Image not found: {image_path}")
+            return None
+        except ValueError as e:
+            print(f"Warning: Image validation failed for {image_path}: {e}")
+            return None
+        except RuntimeError as e:
+            print(f"Warning: No converter available for {image_path}: {e}")
+            return None
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
             return None

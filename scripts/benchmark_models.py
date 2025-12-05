@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 import sys
+import os
 from pathlib import Path
 
 # Add src to path
@@ -128,8 +129,12 @@ Provide a complete technical description suitable for training data generation."
 
     benchmark = ModelBenchmark(client)
 
-    # Test configurations (lower concurrency for VLM)
-    configs = [(2, 2), (4, 2), (4, 4), (8, 4), (8, 8), (16, 8), (16, 16)]
+    # get num max cpus
+    num_max_cpus = os.cpu_count()
+
+    # create a list of config for batch size and concurrency - min bacth of 16 and max of num_max_cpus
+    configs = [(batch_size, concurrency) for batch_size in range(8, 64, 8) for concurrency in range(4, num_max_cpus + 1, 2)]
+    configs = configs[:num_requests]
 
     # Run all tests in single event loop
     async def run_all_tests():
@@ -177,7 +182,7 @@ def main():
     parser.add_argument("--base-url", required=True, help="Model API base URL")
     parser.add_argument("--api-key", default="", help="API key")
     parser.add_argument("--model-name", required=True, help="Model name")
-    parser.add_argument("--num-requests", type=int, default=100, help="Number of test requests")
+    parser.add_argument("--num-requests", type=int, default=30, help="Number of test requests")
     parser.add_argument(
         "--test-images-dir",
         type=Path,

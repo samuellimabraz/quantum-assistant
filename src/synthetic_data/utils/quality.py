@@ -1,11 +1,14 @@
 """Content quality filtering with optimized async processing."""
 
 import asyncio
+import logging
 from typing import List, Tuple
 
 from synthetic_data.extractors.chunker import Chunk
 from synthetic_data.models import LLMClient, Message
 from synthetic_data.parsers.base import ImageReference
+
+logger = logging.getLogger(__name__)
 
 
 class QualityFilter:
@@ -25,74 +28,69 @@ class QualityFilter:
 
     def _parse_filter_response(self, response: str) -> Tuple[bool, str]:
         """
-        Parse filter response with robust handling of various formats.
+        Parse filter response in expected format: DECISION: yes/no\\nREASON: explanation
 
         Args:
-            response: Model response (may vary in format)
+            response: Model response
 
         Returns:
             Tuple of (passed, reason)
+
+        Raises:
+            ValueError: If response format is invalid
         """
         response = response.strip()
-        response_lower = response.lower()
+        if not response:
+            logger.warning("Received empty response from model")
+            raise ValueError("Empty response from model")
+
+        lines = [line.strip() for line in response.split("\n") if line.strip()]
 
         decision = None
-        reason = "No reason provided"
+        reason = None
 
-        # Try structured format: "DECISION: yes/no\nREASON: ..."
-        lines = response.split("\n")
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            line_lower = line_stripped.lower()
+        # Parse each line looking for DECISION and REASON
+        for line in lines:
+            line_lower = line.lower()
 
-            if "decision" in line_lower or "dec" in line_lower:
-                # Extract decision value after colon or space
-                if ":" in line_stripped:
-                    decision_text = line_stripped.split(":", 1)[1].strip().lower()
-                else:
-                    # No colon - try to extract yes/no from line
-                    decision_text = line_stripped.lower()
+            # Match "DECISION: yes/no" or "Decision: yes/no"
+            if line_lower.startswith("decision:") or line_lower.startswith("dec:"):
+                decision_value = line.split(":", 1)[1].strip().lower()
+                if "yes" in decision_value:
+                    decision = True
+                elif "no" in decision_value:
+                    decision = False
 
-                # Look for yes/no in the decision text
-                if "yes" in decision_text:
-                    decision = "yes"
-                elif "no" in decision_text:
-                    decision = "no"
+            # Match "REASON: explanation" or "Reason: explanation"
+            elif line_lower.startswith("reason:"):
+                reason = line.split(":", 1)[1].strip()
+                if reason and not reason[0].isalnum():
+                    reason = reason.lstrip(":- ")
 
-            # Look for reason
-            elif "reason" in line_lower:
-                if ":" in line_stripped:
-                    reason = line_stripped.split(":", 1)[1].strip()
-                else:
-                    # Reason might be on next line
-                    if i + 1 < len(lines):
-                        reason = lines[i + 1].strip()
-
-        # Fallback 1: Check if entire response starts with yes/no
+        # Validation
         if decision is None:
-            if response_lower.startswith("yes"):
-                decision = "yes"
-            elif response_lower.startswith("no"):
-                decision = "no"
+            # Try simple yes/no at start of response
+            first_word = lines[0].lower().split()[0] if lines else ""
+            if first_word == "yes":
+                decision = True
+                reason = response if not reason else reason
+            elif first_word == "no":
+                decision = False
+                reason = response if not reason else reason
+            else:
+                logger.warning("Could not parse decision from response. First 200 chars: %s", response[:200])
+                raise ValueError(f"Could not parse decision from response: {response[:200]}")
 
-        # Fallback 2: Search for yes/no anywhere in response
-        if decision is None:
-            # Count occurrences
-            yes_count = response_lower.count("yes")
-            no_count = response_lower.count("no")
+        if not reason or len(reason.strip()) < 3:
+            # Extract full response as reason if not found
+            reason = (
+                " ".join(lines[1:])
+                if len(lines) > 1
+                else "Model provided decision without explanation"
+            )
+            logger.debug("Reason not found in expected format, using fallback: %s", reason[:100])
 
-            if yes_count > no_count:
-                decision = "yes"
-            elif no_count > yes_count:
-                decision = "no"
-
-        # Default to "no" (reject) if still unclear
-        if decision is None:
-            decision = "no"
-            reason = "Unclear response format"
-
-        passed = decision == "yes"
-        return passed, reason
+        return decision, reason
 
     def is_quality_content(
         self, chunk: Chunk, prompt_template: str, system_prompt: str | None = None
@@ -195,6 +193,8 @@ class QualityFilter:
         progress_callback=None,
         checkpoint_callback=None,
         checkpoint_interval: int = 50,
+        skip_chunk_ids: set[int] | None = None,
+        cached_results: dict[int, bool] | None = None,
         save_debug: bool = True,
     ) -> Tuple[List[Tuple[Chunk, bool]], List[dict]]:
         """
@@ -209,12 +209,17 @@ class QualityFilter:
             progress_callback: Optional callback function(completed_count)
             checkpoint_callback: Optional callback function(results, debug_info)
             checkpoint_interval: Save checkpoint every N completed items
+            skip_chunk_ids: Set of chunk IDs to skip (already processed)
+            cached_results: Dict of chunk_id -> passed for already-processed chunks
             save_debug: Whether to save debug information
 
         Returns:
             Tuple of (List of (chunk, passed_filter) tuples, debug_info list)
         """
         max_concurrent = max_concurrent or self.max_concurrent
+        skip_chunk_ids = skip_chunk_ids or set()
+        cached_results = cached_results or {}
+        
         debug_info = []
         content_results = [None] * len(chunks)
         self._last_debug_info = []
@@ -231,8 +236,30 @@ class QualityFilter:
 
         async def check_content(idx: int, chunk: Chunk) -> None:
             """Check content quality for a single chunk."""
+            # Use cached result if available
+            if chunk.chunk_id in cached_results:
+                content_results[idx] = (cached_results[chunk.chunk_id], "Cached from checkpoint")
+                async with lock:
+                    completed[0] += 1
+                    if progress_callback:
+                        progress_callback(completed[0])
+                return
+
+            # Skip if in skip set
+            if chunk.chunk_id in skip_chunk_ids:
+                content_results[idx] = (True, "Already processed in previous run")
+                async with lock:
+                    completed[0] += 1
+                    if progress_callback:
+                        progress_callback(completed[0])
+                return
+
             if len(chunk.text) < 50:
                 content_results[idx] = (False, "Content too short")
+                async with lock:
+                    completed[0] += 1
+                    if progress_callback:
+                        progress_callback(completed[0])
                 return
 
             messages = [
@@ -242,8 +269,9 @@ class QualityFilter:
 
             async with semaphore:
                 try:
+                    # Client handles retries and timeout internally
                     response = await self.llm_client.generate_async(
-                        messages, max_tokens=1024, temperature=0.1
+                        messages, max_tokens=1024, temperature=0.1, request_timeout=60.0
                     )
                     passed, reason = self._parse_filter_response(response)
                     content_results[idx] = (passed, reason)
@@ -259,16 +287,37 @@ class QualityFilter:
                                     "reason": reason,
                                     "content_preview": chunk.text[:200],
                                     "has_images": len(chunk.images) > 0,
-                                    "full_response": response,
                                 }
                             )
-                except Exception as e:
-                    content_results[idx] = (True, f"Error: {e}")
+
+                except ValueError as e:
+                    # Parsing error after retries - reject chunk
+                    error_msg = str(e)
+                    logger.warning("Parse error for chunk %s: %s", chunk.chunk_id, error_msg)
+                    content_results[idx] = (False, f"Invalid response: {error_msg}")
+
+                except (asyncio.TimeoutError, Exception) as e:
+                    # Timeout or API error after retries - reject chunk
+                    logger.error("Error for chunk %s: %s", chunk.chunk_id, str(e))
+                    content_results[idx] = (False, f"Error after retries: {type(e).__name__}")
 
             async with lock:
                 completed[0] += 1
                 if progress_callback:
                     progress_callback(completed[0])
+
+                # Save checkpoint periodically
+                if checkpoint_callback and (
+                    completed[0] - last_checkpoint[0] >= checkpoint_interval
+                ):
+                    # Build partial results for checkpoint
+                    partial_results = [
+                        (chunks[i], content_results[i][0] if content_results[i] else False)
+                        for i in range(len(chunks))
+                        if content_results[i] is not None
+                    ]
+                    checkpoint_callback(partial_results, debug_info)
+                    last_checkpoint[0] = completed[0]
 
         # Run all content checks concurrently
         content_tasks = [check_content(i, chunk) for i, chunk in enumerate(chunks)]
@@ -293,6 +342,7 @@ class QualityFilter:
             }
         )
 
+        # Final checkpoint
         if checkpoint_callback:
             checkpoint_callback(results, debug_info)
 
