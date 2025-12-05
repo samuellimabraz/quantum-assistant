@@ -49,6 +49,7 @@ dependencies = [
     "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
     "pysat>=3.2.2",
     "python-sat>=1.8.dev24",
+    "ms-swift>=3.10.3",
 ]
 
 [project.optional-dependencies]
