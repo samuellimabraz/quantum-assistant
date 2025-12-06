@@ -1,7 +1,12 @@
 """Utility functions."""
 
 from .cache import PipelineCache
-from .checkpoint import BatchCheckpointProcessor, CheckpointManager
+from .checkpoint import (
+    BatchCheckpointProcessor,
+    CheckpointManager,
+    GenerationCheckpoint,
+    GenerationStageState,
+)
 from .deduplication import Deduplicator
 from .function_extractor import FunctionExtractor, FunctionInfo
 from .image_converter import ImageLoader, SVGConverter, get_image_loader, get_svg_converter
@@ -17,6 +22,8 @@ __all__ = [
     "Deduplicator",
     "FunctionExtractor",
     "FunctionInfo",
+    "GenerationCheckpoint",
+    "GenerationStageState",
     "GenerationTracer",
     "ImageLoader",
     "ImageQualityFilter",

@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from datasets import Dataset, DatasetDict, Features, Image, Value
+from datasets import Dataset, DatasetDict, Features, Image as HFImage, Value
+from PIL import Image as PILImage
 
 from synthetic_data.config import DatasetConfig
 from synthetic_data.models.types import Sample
@@ -120,7 +121,7 @@ class HuggingFaceExporter:
                 "type": Value("string"),
                 "test_code": Value("string"),
                 "entry_point": Value("string"),
-                "image": Image(),
+                "image": HFImage(),
                 "source": Value("string"),
             }
         )
@@ -214,9 +215,18 @@ class HuggingFaceExporter:
 
         Uses ImageLoader which handles SVG conversion with CairoSVG (preferred)
         or Wand as fallback for proper rendering of complex SVG elements.
+
+        Validates the image can be re-opened from bytes to ensure HuggingFace
+        compatibility.
         """
         try:
-            return self.image_loader.load(image_path)
+            img = self.image_loader.load(image_path)
+
+            # Validate: save to bytes and re-open to ensure it's valid
+            # This catches corrupt images that would fail on HuggingFace
+            img = self._validate_image(img, image_path)
+            return img
+
         except FileNotFoundError:
             print(f"Warning: Image not found: {image_path}")
             return None
@@ -228,6 +238,38 @@ class HuggingFaceExporter:
             return None
         except Exception as e:
             print(f"Error loading image {image_path}: {e}")
+            return None
+
+    def _validate_image(self, img: PILImage.Image, image_path: Path) -> PILImage.Image | None:
+        """Validate image can be serialized and deserialized.
+
+        HuggingFace datasets serialize images to bytes then decode them.
+        This validation catches corrupt images that would fail on the Hub.
+        """
+        import io
+
+        if img is None:
+            return None
+
+        try:
+            # Ensure RGB mode (some formats cause issues)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+
+            # Validate by round-trip: save to bytes and re-open
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            buffer.seek(0)
+
+            # Re-open to verify bytes are valid
+            validated_img = PILImage.open(buffer)
+            validated_img.load()  # Force load pixel data
+
+            # Return a copy that doesn't depend on the buffer
+            return validated_img.copy()
+
+        except Exception as e:
+            print(f"Warning: Image validation failed for {image_path}: {e}")
             return None
 
     def _create_dataset_card(self, output_path: Path, dataset_dict: DatasetDict) -> None:

@@ -104,8 +104,8 @@ class CategoryClassifier:
         batch_messages = []
         for sample in samples:
             user_prompt = prompt_template.format(
-                question=sample.question[:1000],
-                answer=sample.answer[:1000],
+                question=sample.question,
+                answer=sample.answer,
                 question_type=sample.question_type,
             )
             batch_messages.append(
@@ -119,8 +119,8 @@ class CategoryClassifier:
         responses = await self.llm_client.generate_batch_async(
             batch_messages,
             max_concurrent=max_concurrent,
-            temperature=0.1,
-            max_tokens=100,
+            temperature=0.2,
+            max_tokens=512,
             progress_callback=progress_callback,
         )
 

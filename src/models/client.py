@@ -67,7 +67,7 @@ class LLMClient:
         temperature: float = 0.7,
         timeout: float = 300.0,
         max_retries: int = 5,
-        retry_delay: float = 1.0,
+        retry_delay: float = 2.0,
         service_tier: str | None = "auto",
         max_connections: int = 100,
         top_p: float | None = None,

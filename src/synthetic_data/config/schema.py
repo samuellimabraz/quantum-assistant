@@ -57,6 +57,9 @@ class ModelEndpoint(BaseModel):
     model_name: str | None = None
     max_tokens: int = Field(default=4096, ge=1)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    timeout: float = Field(default=300.0, ge=1.0)
+    max_retries: int = Field(default=5, ge=0, le=10)
+    retry_delay: float = Field(default=1.0, ge=0.1)
     service_tier: str | None = Field(default=None)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     min_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -164,6 +167,12 @@ class GenerationConfig(BaseModel):
     vlm_batch_size: int = Field(default=16, ge=1)
     vlm_concurrency: int = Field(default=16, ge=1)
 
+    # Allocation and diversity settings
+    over_allocation_factor: float = Field(default=1.8, ge=1.0, le=3.0)
+    diversity_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    max_generation_attempts: int = Field(default=3, ge=1, le=10)
+    keep_extra_samples: bool = Field(default=True)
+
     # Per-type allocation configuration
     type_allocations: dict[str, TypeAllocationConfig] = Field(
         default_factory=lambda: {
@@ -198,8 +207,11 @@ class GenerationConfig(BaseModel):
     code_verification_max_iterations: int = Field(default=3, ge=1, le=10)
     code_verification_timeout: int = Field(default=30, ge=5, le=120)
     code_verification_concurrency: int = Field(default=5, ge=1)
+    skip_ibm_service_validation: bool = Field(default=True)
 
     test_validation_timeout: int = Field(default=60, ge=10, le=300)
+    answer_checkpoint_interval: int = Field(default=50, ge=1)
+    input_planning_checkpoint_interval: int = Field(default=20, ge=1)
 
 
 class DatasetConfig(BaseModel):

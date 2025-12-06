@@ -42,6 +42,9 @@ models:
       model_name: ${VISION_MODEL_NAME}
       max_tokens: 8192
       temperature: 0.1
+      max_retries: 5
+      retry_delay: 1.0
+      timeout: 300.0
 
     - name: question-model
       base_url: ${QUESTION_MODEL_BASE_URL}
@@ -50,6 +53,9 @@ models:
       max_tokens: 8192
       temperature: 1.0
       service_tier: "auto"
+      max_retries: 7
+      retry_delay: 2.0
+      timeout: 300.0
 
     - name: answer-model
       base_url: ${ANSWER_MODEL_BASE_URL}
@@ -58,6 +64,9 @@ models:
       max_tokens: 4096
       temperature: 1.0
       service_tier: "auto"
+      max_retries: 7
+      retry_delay: 2.0
+      timeout: 300.0
 
     - name: curate-model
       base_url: ${CURATE_MODEL_BASE_URL}
@@ -66,6 +75,9 @@ models:
       max_tokens: 4096
       temperature: 0.1
       service_tier: "auto"
+      max_retries: 5
+      retry_delay: 1.0
+      timeout: 300.0
 
 prompts:
   # =============================================================================
@@ -286,7 +298,7 @@ prompts:
     - Do NOT include imports (they're in the stub)
     - Do NOT include function signature or docstring
     - Use proper indentation (4 spaces - same as the 'pass' statement)
-    - Base your implementation on code patterns from the context
+    - Base your implementation on code patterns from the context.
     - Use Qiskit 2.0 APIs: assign_parameters(), Statevector.from_instruction(), Operator(), etc.
 
     QISKIT HUMANEVAL FORMAT EXAMPLES:
@@ -364,6 +376,23 @@ prompts:
         quantum_circuit.h(0)
         quantum_circuit.cx(0, 1)
         return quantum_circuit
+
+    EXAMPLE 6 - Multimodal input with few details:
+    Stub:
+    ```python
+      from qiskit import QuantumCircuit
+      from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+      from qiskit_ibm_runtime.fake_provider import FakeBrisbane
+
+      def create_toffoli_decomposed_circuit():
+          """Return the 3‑qubit circuit shown in the image (Toffoli decomposed into rz, sx, and cx gates)."""
+          pass
+      ```
+    Answer (ONLY the body):
+        qc = QuantumCircuit(3)
+        qc.ccx(0, 1, 2)
+        qc = transpile(qc, basis_gates=["rz", "sx", "cx"])
+        return qc
 
     INDENTATION RULES (CRITICAL):
     - The 'pass' statement in the stub shows the correct indentation level (typically 4 spaces)
@@ -454,19 +483,9 @@ prompts:
         quantum_circuit.rx(theta, 0)
         return quantum_circuit
 
-    EXAMPLE 5 - Unitary from matrix:
-    Task: "Convert the matrix [[0,0,0,1],[0,0,1,0],[1,0,0,0],[0,1,0,0]] into a unitary gate and apply it to a 2-qubit QuantumCircuit. You must implement this using a function named `create_unitary_from_matrix` with no arguments."
-    Answer:
-    from qiskit import QuantumCircuit
 
-    def create_unitary_from_matrix():
-        matrix = [[0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0]]
-        circuit = QuantumCircuit(2)
-        circuit.unitary(matrix, [0, 1])
-        return circuit
-
-    EXAMPLE 6 - Multimodal input:
-    Task: "Generate the circuit shown in the image. The circuit have 3 qubits and apply a H in q0, a CNOT controlled by q0 and target q1, and a Rz with parameter 0.5 in q1. Measure all qubits. You must implement this using a function named `create_circuit` with no arguments."
+    EXAMPLE 5 - Multimodal input:
+    Task: "Generate the circuit shown in the image. Measure all qubits. You must implement this using a function named `create_circuit` with no arguments."
     Answer:
     from qiskit import QuantumCircuit
     def create_circuit():
@@ -482,11 +501,12 @@ prompts:
     - Use code patterns from context when available
     - Ensure code is executable and passes the test
 
-    FOR MULTIMODAL TASKS (with images):
+    FOR MULTIMODAL TASKS:
     - PRIORITIZE the [Code That Generated Target Image] section if present
     - This code shows EXACTLY what produces the visualization
     - Your implementation should match this code, not other code in context
     - If the task says "shown in the image", implement what THAT code does
+    - Prioriteze the code than the target image description
 
     Return ONLY Python code (no markdown, no explanations).
 
@@ -572,6 +592,8 @@ prompts:
     2. Extract function patterns from context code
     3. DO NOT invent new functionality not present in context
     4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally
+    5. Prioriteze the code than the target image description
+    6. DO NOT describe the image details in the task
 
     FORMAT: A function stub with imports, signature, docstring, and `pass`.
 
@@ -586,7 +608,7 @@ prompts:
         pass
     ```
 
-    EXAMPLE 2 - Multimodal (circuit image):
+    EXAMPLE 2 - Multimodal:
     ```python
     from qiskit import QuantumCircuit
     def create_circuit():
@@ -595,7 +617,7 @@ prompts:
         pass
     ```
 
-    EXAMPLE 3 - Multimodal with key details:
+    EXAMPLE 3 - Multimodal with few details:
     ```python
     from qiskit import QuantumCircuit
     def create_bell_circuit():
@@ -643,10 +665,10 @@ prompts:
     ✗ BAD: "Create a circuit with H on q0, CNOT from q0 to q1, as shown in image..."
 
     CRITICAL - TARGET IMAGE ALIGNMENT:
-    - Your function MUST implement what is shown in [TARGET IMAGE]
-    - If [Code That Generated Target Image] is provided, use THAT specific code as your reference
+    - Try focus on the code that generated the target image first.
+    - If [Code That Generated Target Image] is provided, use THAT specific code as your priority reference
     - Do NOT base your function on code that appears AFTER the target image in context
-    - The target image is the PRIMARY focus - other code is supplementary context only
+    - If dont have the target image code, focus on [TARGET IMAGE] and the rest of context.
 
     REQUIREMENTS:
     - Include ALL necessary imports at the top
@@ -667,7 +689,7 @@ prompts:
     1. Base the task on code patterns and examples from the context
     2. Extract implementation patterns from context code
     3. DO NOT invent new functionality not present in context
-    4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally
+    4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally. DO NOT describe the image in the task. Prioriteze the code than the target image description
 
     FORMAT: Natural language task + function specification.
     Pattern: [Task in 1-2 sentences] You must implement this using a function named `name` with [no arguments / the following arguments: ...].
@@ -703,6 +725,8 @@ prompts:
     MULTIMODAL TASK GUIDELINES:
     - Reference image naturally: "shown in the image", "in the diagram", "as depicted"
     - Include only KEY details from context (e.g., "3-qubit GHZ", "Bell state", "Deutsch-Jozsa algorithm")
+    - DO NOT describe the image details in the task
+    - Prioriteze the code than the target image description
 
     CRITICAL - TARGET IMAGE ALIGNMENT:
     - Your task MUST be about what is shown in [TARGET IMAGE], not other parts of context
@@ -945,16 +969,12 @@ prompts:
 
     - Example 2: "Image Type: Quantum Circuit Diagram
     Registers: Quantum `q0`, `q1`, `q2`; Classical `c` (size 3).
-
     Layer 1:
     - Gate `H` on `q0`.
-
     Layer 2:
     - `CNOT` (CX) Gate: Control `q0`, Target `q1`.
-
     Layer 3:
     - Gate `Rz` on `q1` with parameter `0.5`.
-
     Layer 4:
     - `Measurement`: Source `q0` -> Destination Classical Bit `0`."
 
@@ -1074,7 +1094,6 @@ prompts:
     MULTIMODAL COHERENCE (if has_image=yes):
     - Question should reference the image naturally
     - Question should be about interpreting/implementing what the image shows
-    - The image must be essential to answering, not decorative
 
     CONTEXT RELEVANCE:
     - Answer should use concepts/patterns from the context
@@ -1126,7 +1145,7 @@ prompts:
     REASON: Brief explanation
 
 generation:
-  target_samples: 120 # Final dataset target
+  target_samples: 75 # Final dataset target
 
   question_model: question-model
   vision_model: vision-model
@@ -1134,8 +1153,8 @@ generation:
   curate_model: curate-model
   filter_model: curate-model
 
-  llm_batch_size: 64
-  llm_concurrency: 32
+  llm_batch_size: 32
+  llm_concurrency: 10
   vlm_batch_size: 32
   vlm_concurrency: 16
 
@@ -1146,17 +1165,11 @@ generation:
 
   # Over-allocation to reduce retry attempts (1.8x = generate 80% more candidates)
   # With 8000 target: generates 14,400 candidates → expect 1-2 attempts
-  over_allocation_factor: 1.8
+  over_allocation_factor: 1.7
 
   # Diversity weight for chunk/image selection (0=score only, 1=diversity only)
   # 0.4 provides optimal balance: 81.9% chunk coverage, 98.6% image coverage
-  diversity_weight: 0.4
-
-  # Maximum generation attempts (reduced from 10 due to over-allocation)
-  max_generation_attempts: 3
-
-  # Keep extra samples beyond target (True = scale up proportionally, False = trim to exact target)
-  keep_extra_samples: true
+  diversity_weight: 0.5
 
   # Input planning
   enable_candidate_filtering: true
@@ -1196,15 +1209,17 @@ generation:
   enable_image_transcription: true
   enable_content_filtering: true
   enable_curate_filtering: true
-  enable_deduplication: true
+  enable_deduplication: false
   similarity_threshold: 0.85
 
   enable_code_verification: true
   code_verification_max_iterations: 7
   code_verification_timeout: 60
   code_verification_concurrency: 10
+  skip_ibm_service_validation: false
 
-  test_validation_timeout: 60
+  test_validation_timeout: 30
+  answer_checkpoint_interval: 30
 
 dataset:
   name: quantum-multimodal

@@ -15,12 +15,18 @@ from synthetic_data.cli.commands import (
     export,
     filter_images,
     filter_quality,
-    generate,
     inspect,
     inspect_traces,
     parse,
-    pipeline,
     transcribe,
+)
+from synthetic_data.cli.generation_commands import (
+    answer,
+    classify,
+    curate,
+    filter_candidates,
+    generate,
+    plan,
 )
 from synthetic_data.utils import PipelineCache
 
@@ -32,20 +38,109 @@ app = typer.Typer(
 
 console = Console()
 
-# Register pipeline commands
+# Register pipeline commands - Document processing
 app.command(name="parse", help="Step 1: Parse documents and resolve images")(parse)
 app.command(name="transcribe", help="Step 2: Transcribe images using VLM")(transcribe)
 app.command(name="filter-images", help="Step 3: Filter images for quality")(filter_images)
 app.command(name="chunk", help="Step 4: Chunk documents into context-sized pieces")(chunk)
 app.command(name="filter-chunks", help="Step 5: Filter chunks for quality")(filter_quality)
-app.command(name="generate", help="Step 6: Generate samples (includes classification)")(generate)
+
+# Register pipeline commands - Generation stages
+app.command(name="plan", help="Step 6a: Generate questions and tests from chunks")(plan)
+app.command(name="filter-candidates", help="Step 6b: Filter candidates for quality")(
+    filter_candidates
+)
+app.command(name="answer", help="Step 6c: Generate and validate answers")(answer)
+app.command(name="curate", help="Step 6d: Quality curation of samples")(curate)
+app.command(name="classify", help="Step 6e: Classify samples into categories")(classify)
+app.command(name="generate", help="Step 6: Run all generation stages")(generate)
+
+# Register pipeline commands - Dataset building
 app.command(name="build", help="Step 7: Build train/val/test splits")(build)
 app.command(name="export", help="Step 8: Export to HuggingFace format")(export)
+
+# Register utility commands
 app.command(name="analyze", help="Analyze dataset and generate visualizations")(analyze)
-app.command(name="pipeline", help="Run complete pipeline (all steps)")(pipeline)
 app.command(name="inspect", help="Inspect intermediate results (PKL files)")(inspect)
 app.command(name="inspect-traces", help="Inspect generation prompts and responses")(inspect_traces)
-app.command(name="analyze-allocation", help="Analyze allocation strategies and diversity")(analyze_allocation)
+app.command(name="analyze-allocation", help="Analyze allocation strategies and diversity")(
+    analyze_allocation
+)
+
+
+@app.command()
+def pipeline(
+    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
+    hub_id: str = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
+    token: str = typer.Option(None, "--token", "-t", help="HuggingFace token"),
+    skip_analysis: bool = typer.Option(False, "--skip-analysis", help="Skip analysis step"),
+):
+    """Run the complete pipeline: parse → transcribe → filter-images → chunk → filter-chunks → generate → build → export → analyze."""
+    from rich.panel import Panel
+    import time
+
+    console.print(
+        Panel.fit(
+            "[bold cyan]Complete Pipeline[/bold cyan]\nRunning all steps sequentially",
+            title="Full Pipeline",
+        )
+    )
+
+    start_time = time.time()
+
+    # Build steps list
+    steps = [
+        ("Parse", lambda: parse(config_path, no_cache, False)),
+        ("Transcribe", lambda: transcribe(config_path, no_cache)),
+        ("Filter Images", lambda: filter_images(config_path, no_cache)),
+        ("Chunk", lambda: chunk(config_path, no_cache)),
+        ("Filter Chunks", lambda: filter_quality(config_path, no_cache)),
+        ("Generate", lambda: generate(config_path, no_cache)),
+        ("Build", lambda: build(config_path)),
+        ("Export", lambda: export(config_path, hub_id, token, False)),
+    ]
+
+    if not skip_analysis:
+        _hub_id = hub_id
+        _token = token
+        steps.append(
+            (
+                "Analyze",
+                lambda: analyze(
+                    config_path=config_path,
+                    source="splits",
+                    output_dir=None,
+                    no_plots=False,
+                    include_allocation=True,
+                    include_pipeline=True,
+                    hub_id=_hub_id,
+                    token=_token,
+                ),
+            )
+        )
+
+    for i, (step_name, step_func) in enumerate(steps, 1):
+        console.print(f"\n[bold]━━━ Step {i}/{len(steps)}: {step_name} ━━━[/bold]\n")
+        try:
+            step_func()
+        except Exception as e:
+            console.print(f"\n[red]✗ Pipeline failed at step {step_name}: {e}[/red]")
+            raise
+
+    elapsed = time.time() - start_time
+    minutes = int(elapsed // 60)
+    seconds = int(elapsed % 60)
+
+    console.print(
+        Panel.fit(
+            f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
+            f"All {len(steps)} steps completed successfully\n"
+            f"Total time: {minutes}m {seconds}s",
+            title="Success",
+            border_style="green",
+        )
+    )
 
 
 @app.command()
@@ -72,15 +167,14 @@ def info(config_path: Path = typer.Option(..., "--config", "-c", help="Config fi
 
     console.print("\n[bold]Generation:[/bold]")
     console.print(f"  Target samples: {config.generation.target_samples:,}")
-    console.print(f"  Candidates per chunk: {config.generation.candidates_per_chunk}")
+    console.print(f"  Over-allocation: {config.generation.over_allocation_factor}x")
+    console.print(f"  Diversity weight: {config.generation.diversity_weight}")
     console.print(f"  Question model: {config.generation.question_model}")
     console.print(f"  Vision model: {config.generation.vision_model or 'None'}")
     console.print(f"  Answer model: {config.generation.answer_model}")
     console.print(f"  Curate model: {config.generation.curate_model}")
-    console.print(f"  Multimodal ratio: {config.generation.multimodal_ratio:.1%}")
-    console.print(f"  Content filtering: {config.generation.enable_content_filtering}")
     console.print(f"  Candidate filtering: {config.generation.enable_candidate_filtering}")
-    console.print(f"  Deduplication: {config.generation.enable_deduplication}")
+    console.print(f"  Quality curation: {config.generation.enable_curate_filtering}")
 
     console.print("\n[bold]Dataset:[/bold]")
     console.print(f"  Name: {config.dataset.name}")
@@ -128,8 +222,8 @@ def cache_info(config_path: Path = typer.Option(..., "--config", "-c", help="Con
     cache_dir = Path(config.dataset.parsed_dir).parent / ".cache"
     cache = PipelineCache(cache_dir)
 
-    cache_info = cache.get_cache_info()
-    if not cache_info:
+    cache_data = cache.get_cache_info()
+    if not cache_data:
         console.print("[yellow]No cache found[/yellow]")
         return
 
@@ -142,7 +236,7 @@ def cache_info(config_path: Path = typer.Option(..., "--config", "-c", help="Con
     table.add_column("Timestamp")
 
     total_size = 0
-    for stage, info in cache_info.items():
+    for stage, info in cache_data.items():
         size_mb = info["size"] / 1024 / 1024
         total_size += info["size"]
         table.add_row(

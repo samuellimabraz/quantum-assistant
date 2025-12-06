@@ -197,6 +197,9 @@ class ChunkScorer:
 
     def compute_code_score(self, chunk: Chunk, target_image: ImageReference | None = None) -> float:
         """Compute suitability score for code generation tasks."""
+        if target_image is not None and target_image.image_type not in self.CODE_IMAGE_TYPES:
+            return 0.0
+
         score = 0.0
 
         if chunk.code_blocks:

@@ -15,6 +15,8 @@ class ModelEndpoint:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         timeout: float = 300.0,
+        max_retries: int = 5,
+        retry_delay: float = 2.0,
         service_tier: str | None = None,
         top_p: float | None = None,
         min_p: float | None = None,
@@ -30,6 +32,8 @@ class ModelEndpoint:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         self.service_tier = service_tier
         self.top_p = top_p
         self.min_p = min_p
@@ -66,6 +70,8 @@ class ModelRegistry:
             max_tokens=endpoint.max_tokens,
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
+            max_retries=endpoint.max_retries,
+            retry_delay=endpoint.retry_delay,
             service_tier=endpoint.service_tier,
             top_p=endpoint.top_p,
             min_p=endpoint.min_p,
@@ -95,6 +101,8 @@ class ModelRegistry:
             max_tokens=endpoint.max_tokens,
             temperature=endpoint.temperature,
             timeout=endpoint.timeout,
+            max_retries=endpoint.max_retries,
+            retry_delay=endpoint.retry_delay,
             service_tier=endpoint.service_tier,
             top_p=endpoint.top_p,
             min_p=endpoint.min_p,

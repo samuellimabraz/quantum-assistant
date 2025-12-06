@@ -32,7 +32,6 @@ from synthetic_data.dataset import (
     HuggingFaceExporter,
 )
 from synthetic_data.extractors import ContentChunker, DocumentIngestion, ImageTranscriber
-from synthetic_data.generators import GenerationPipeline
 from synthetic_data.models import ModelRegistry
 from synthetic_data.parsers.base import Document
 from synthetic_data.utils import (
@@ -203,17 +202,20 @@ def parse(
 
 
 def _associate_code_context_with_images(documents: list) -> int:
-    """Associate code blocks with nearby images to provide context for transcription.
+    """Associate code blocks that PRECEDE images to provide context for transcription.
 
-    This helps the VLM understand what code generated the image output.
+    Only code blocks appearing BEFORE an image in the document are associated.
+    This ensures the VLM understands what code generated the image output.
+
     Returns the number of images that received code context.
     """
     import re
 
     code_context_count = 0
+    code_pattern = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL)
 
     for doc in documents:
-        if not doc.code_blocks or not doc.images:
+        if not doc.images:
             continue
 
         content = doc.content
@@ -229,44 +231,20 @@ def _associate_code_context_with_images(documents: list) -> int:
             if marker_pos == -1:
                 continue
 
-            # Look for code blocks before this image (within ~2000 chars)
-            # Code that generates output typically appears just before the output image
-            search_start = max(0, marker_pos - 2000)
-            content_before = content[search_start:marker_pos]
+            # Only look at content BEFORE this image
+            content_before = content[:marker_pos]
 
-            # Find all code block markers in the content before the image
-            # Match patterns like ```python ... ``` or just code references
-            code_pattern = r"```(?:python)?\s*(.*?)```"
-            code_matches = list(re.finditer(code_pattern, content_before, re.DOTALL))
+            # Find all code blocks in content before the image
+            code_matches = list(code_pattern.finditer(content_before))
 
-            if code_matches:
-                # Use the closest (last) code block before the image
-                last_code = code_matches[-1].group(1).strip()
-                if last_code and len(last_code) > 20:  # Skip trivial code
-                    img.code_context = last_code[:2000]  # Limit size
-                    code_context_count += 1
-            else:
-                # Fallback: use the most recent code block from doc.code_blocks
-                # that appears to be related (contains draw, plot, visualize, etc.)
-                relevant_keywords = [
-                    "draw",
-                    "plot",
-                    "visualize",
-                    "circuit",
-                    "histogram",
-                    "bloch",
-                    "figure",
-                    "show",
-                    "display",
-                    ".png",
-                    ".svg",
-                ]
+            if not code_matches:
+                continue
 
-                for code_block in reversed(doc.code_blocks):
-                    if any(kw in code_block.lower() for kw in relevant_keywords):
-                        img.code_context = code_block[:2000]
-                        code_context_count += 1
-                        break
+            # Use the closest (last) code block before the image
+            last_code = code_matches[-1].group(1).strip()
+            if last_code and len(last_code) > 20:
+                img.code_context = last_code[:2000]
+                code_context_count += 1
 
     return code_context_count
 
@@ -1160,349 +1138,8 @@ def filter_quality(
         console.print(f"[dim]  Filter decisions: {debug_file.name}[/dim]")
 
 
-def generate(
-    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
-    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
-    enable_tracing: bool = typer.Option(
-        True, "--trace/--no-trace", help="Enable detailed prompt/response tracing"
-    ),
-):
-    """Step 6: Generate synthetic Q&A samples with post-generation classification."""
-    console.print(
-        Panel.fit(
-            "[bold cyan]Step 6: Sample Generation[/bold cyan]\n"
-            "Generate synthetic Q&A samples from chunks\n"
-            "Uses over-allocation + diversity-aware selection\n"
-            "Includes input planning, answer generation, and classification",
-            title="Generate",
-        )
-    )
-
-    config = PipelineConfig.from_yaml(config_path)
-
-    # Load chunks (prefer filtered, fallback to unfiltered)
-    filtered_dir = Path(config.dataset.parsed_dir).parent / "filtered"
-    chunks_dir = Path(config.dataset.parsed_dir).parent / "chunks"
-
-    if (filtered_dir / "chunks.pkl").exists():
-        input_file = filtered_dir / "chunks.pkl"
-        console.print("[cyan]Loading filtered chunks[/cyan]")
-    elif (chunks_dir / "chunks.pkl").exists():
-        input_file = chunks_dir / "chunks.pkl"
-        console.print("[cyan]Loading unfiltered chunks[/cyan]")
-    else:
-        console.print("[red]✗ No chunks found. Run 'chunk' first.[/red]")
-        raise typer.Exit(1)
-
-    with open(input_file, "rb") as f:
-        all_chunks = pickle.load(f)
-
-    console.print(f"[cyan]Loaded {len(all_chunks)} chunks[/cyan]")
-    console.print(f"[cyan]Target: {config.generation.target_samples} samples[/cyan]")
-
-    # Show allocation settings
-    over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
-    diversity = getattr(config.generation, "diversity_weight", 0.4)
-    max_attempts = getattr(config.generation, "max_generation_attempts", 3)
-    console.print(
-        f"[cyan]Over-allocation: {over_alloc}x | Diversity weight: {diversity} | Max attempts: {max_attempts}[/cyan]"
-    )
-
-    output_dir = Path(config.dataset.generated_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "samples.pkl"
-
-    checkpoint_dir = output_dir.parent / ".checkpoints"
-    checkpoint_manager = CheckpointManager(checkpoint_dir, "generate")
-
-    if output_file.exists() and not no_cache:
-        console.print(f"[cyan]Samples already exist: {output_file}[/cyan]")
-        console.print("[yellow]Use --no-cache to re-generate[/yellow]")
-        return
-
-    samples = []
-    rejected_samples_list = []
-    code_failures_list = []
-
-    if not no_cache and checkpoint_manager.exists():
-        checkpoint_data = checkpoint_manager.load_checkpoint()
-        if checkpoint_data:
-            checkpoint_state, metadata = checkpoint_data
-            samples = checkpoint_state.get("samples", [])
-            rejected_samples_list = checkpoint_state.get("rejected_samples", [])
-            code_failures_list = checkpoint_state.get("code_failures", [])
-            current_stage = metadata.get("current_stage", "start")
-
-            if samples:
-                console.print(f"[cyan]Resuming from checkpoint: {len(samples)} samples[/cyan]")
-            if current_stage != "start" and current_stage != "complete":
-                console.print(f"[cyan]Resuming from stage: {current_stage}[/cyan]")
-
-    console.print("\n[cyan]Pipeline stages:[/cyan]")
-    console.print("  [dim]Stage 1: Input Planning (candidates per chunk)[/dim]")
-    console.print("  [dim]Stage 2: Candidate Filtering[/dim]")
-    console.print("  [dim]Stage 3: Answer Generation + Validation[/dim]")
-    if config.generation.enable_curate_filtering:
-        console.print("  [dim]Stage 4: Quality Curation[/dim]")
-    console.print("  [dim]Stage 5: Post-Generation Classification[/dim]")
-
-    if enable_tracing:
-        trace_dir = output_dir / "traces"
-        console.print(f"\n[dim]Tracing enabled: {trace_dir}[/dim]")
-        console.print("[dim]  - generation_traces.jsonl: Individual prompt/response entries[/dim]")
-        console.print("[dim]  - conversations.jsonl: Complete conversation threads[/dim]")
-    console.print()
-
-    # Track current stage for proper progress display
-    current_stage_name = {"value": "input_generation"}
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,  # Keep completed tasks visible
-    ) as progress:
-        # Create all tasks upfront but hide some initially
-        questions_task = progress.add_task(
-            "[cyan]Stage 1: Input Planning[/cyan]", total=None, visible=True
-        )
-        filter_task = progress.add_task(
-            "[cyan]Stage 2: Candidate Filtering[/cyan]", total=None, visible=False
-        )
-        answers_task = progress.add_task(
-            "[cyan]Stage 3: Answer Generation[/cyan]", total=None, visible=False
-        )
-        curation_task = progress.add_task(
-            "[cyan]Stage 4: Quality Curation[/cyan]", total=None, visible=False
-        )
-        classification_task = progress.add_task(
-            "[cyan]Stage 5: Classification[/cyan]", total=None, visible=False
-        )
-
-        def set_questions_total(total):
-            progress.update(questions_task, total=total)
-
-        def update_question_progress(completed):
-            progress.update(questions_task, completed=completed)
-
-        def set_filter_total(total):
-            progress.update(filter_task, total=total, visible=True)
-
-        def update_filter_progress(completed):
-            progress.update(filter_task, completed=completed)
-
-        def set_answers_total(total):
-            progress.update(answers_task, total=total, visible=True)
-
-        def update_answer_progress(completed):
-            progress.update(answers_task, completed=completed)
-
-        def set_curation_total(total):
-            progress.update(curation_task, total=total, visible=True)
-
-        def update_curation_progress(completed):
-            progress.update(curation_task, completed=completed)
-
-        def set_classification_total(total):
-            progress.update(classification_task, total=total, visible=True)
-
-        def update_classification_progress(completed):
-            progress.update(classification_task, completed=completed)
-
-        def handle_stage_change(stage_name):
-            """Handle stage changes to update progress visibility."""
-            current_stage_name["value"] = stage_name
-
-            # Mark completed stages as done
-            if stage_name == "candidate_filtering":
-                # Stage 1 complete, show stage 2
-                progress.update(
-                    questions_task, description="[green]✓ Stage 1: Input Planning[/green]"
-                )
-                progress.update(filter_task, visible=True)
-            elif stage_name == "answer_generation":
-                # Stage 2 complete, show stage 3
-                progress.update(
-                    filter_task, description="[green]✓ Stage 2: Candidate Filtering[/green]"
-                )
-                progress.update(answers_task, visible=True)
-            elif stage_name == "quality_curation":
-                # Stage 3 complete, show stage 4
-                progress.update(
-                    answers_task, description="[green]✓ Stage 3: Answer Generation[/green]"
-                )
-                progress.update(curation_task, visible=True)
-            elif stage_name == "classification":
-                # Stage 4 complete, show stage 5
-                progress.update(
-                    curation_task, description="[green]✓ Stage 4: Quality Curation[/green]"
-                )
-                progress.update(classification_task, visible=True)
-
-        def save_rejected(rejected):
-            rejected_samples_list.extend(rejected)
-
-        def save_code_failures(failures_batch):
-            code_failures_list.extend(failures_batch)
-
-        progress_callbacks = {
-            "set_questions_total": set_questions_total,
-            "questions": update_question_progress,
-            "set_filter_total": set_filter_total,
-            "filter": update_filter_progress,
-            "set_answers_total": set_answers_total,
-            "answers": update_answer_progress,
-            "set_curation_total": set_curation_total,
-            "curation": update_curation_progress,
-            "set_classification_total": set_classification_total,
-            "classification": update_classification_progress,
-            "stage_change": handle_stage_change,
-            "save_rejected": save_rejected,
-            "save_code_failures": save_code_failures,
-            "no_cache": no_cache,
-        }
-
-        with ModelRegistry(config.models) as model_registry:
-            gen_pipeline = GenerationPipeline(
-                config,
-                model_registry,
-                checkpoint_manager,
-                output_dir=output_dir,
-                enable_tracing=enable_tracing,
-            )
-
-            try:
-                samples = gen_pipeline.generate_samples(all_chunks, progress_callbacks)
-
-                # Mark final stage as complete
-                progress.update(
-                    classification_task, description="[green]✓ Stage 5: Classification[/green]"
-                )
-
-            except Exception as e:
-                console.print(f"\n[red]✗ Generation failed: {e}[/red]")
-                console.print("[yellow]Progress has been saved to checkpoint[/yellow]")
-                if enable_tracing:
-                    console.print(f"[yellow]Check traces at: {output_dir / 'traces'}[/yellow]")
-                raise
-
-    console.print()
-
-    # Save samples
-    with open(output_file, "wb") as f:
-        pickle.dump(samples, f)
-
-    checkpoint_manager.clear_checkpoint()
-
-    # Save JSONL
-    with open(output_dir / "samples.jsonl", "w", encoding="utf-8") as f:
-        for sample in samples:
-            json.dump(
-                {
-                    "question": sample.question,
-                    "answer": sample.answer,
-                    "category": sample.category,
-                    "question_type": sample.question_type,
-                    "test_code": sample.test_code,
-                    "entry_point": sample.entry_point,
-                    "image_path": sample.image_path,
-                    "source_path": sample.source_path,
-                },
-                f,
-                ensure_ascii=False,
-            )
-            f.write("\n")
-
-    # Save rejected samples
-    if rejected_samples_list:
-        with open(output_dir / "rejected_samples.jsonl", "w", encoding="utf-8") as f:
-            for rejected in rejected_samples_list:
-                json.dump(rejected, f, ensure_ascii=False)
-                f.write("\n")
-
-        console.print(f"\n[yellow]ℹ {len(rejected_samples_list)} rejected samples saved[/yellow]")
-
-    # Save code verification failures
-    if code_failures_list:
-        with open(output_dir / "code_verification_failures.jsonl", "w", encoding="utf-8") as f:
-            for failure in code_failures_list:
-                json.dump(failure, f, ensure_ascii=False)
-                f.write("\n")
-
-        console.print(
-            f"[yellow]ℹ {len(code_failures_list)} code verification failures saved[/yellow]"
-        )
-
-    # Summary
-    samples_with_tests = sum(1 for s in samples if s.test_code)
-    summary = {
-        "total_samples": len(samples),
-        "rejected_samples": len(rejected_samples_list),
-        "code_verification_failures": len(code_failures_list),
-        "multimodal_samples": sum(1 for s in samples if s.image_path),
-        "text_only_samples": sum(1 for s in samples if not s.image_path),
-        "samples_with_tests": samples_with_tests,
-        "by_type": {},
-        "by_category": {},
-    }
-
-    for sample in samples:
-        summary["by_type"][sample.question_type] = (
-            summary["by_type"].get(sample.question_type, 0) + 1
-        )
-        summary["by_category"][sample.category] = summary["by_category"].get(sample.category, 0) + 1
-
-    with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
-
-    table = Table(title="Generation Complete")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green", justify="right")
-    table.add_row("Total Samples", str(len(samples)))
-    table.add_row("With Unit Tests", str(samples_with_tests))
-    table.add_row("Multimodal", str(summary["multimodal_samples"]))
-    table.add_row("Text-only", str(summary["text_only_samples"]))
-
-    console.print("\n")
-    console.print(table)
-
-    # Type distribution
-    type_table = Table(title="By Question Type")
-    type_table.add_column("Type", style="cyan")
-    type_table.add_column("Count", style="green", justify="right")
-    for qtype, count in sorted(summary["by_type"].items()):
-        type_table.add_row(qtype, str(count))
-
-    console.print("\n")
-    console.print(type_table)
-
-    # Category distribution
-    if summary["by_category"]:
-        cat_table = Table(title="By Category")
-        cat_table.add_column("Category", style="cyan")
-        cat_table.add_column("Count", style="green", justify="right")
-        for cat, count in sorted(summary["by_category"].items(), key=lambda x: x[1], reverse=True):
-            cat_table.add_row(cat, str(count))
-
-        console.print("\n")
-        console.print(cat_table)
-
-    console.print(f"\n[green]✓ Saved to: {output_dir}[/green]")
-
-    # Show trace file locations if tracing was enabled
-    trace_dir = output_dir / "traces"
-    if trace_dir.exists():
-        console.print("\n[dim]Generation traces saved to:[/dim]")
-        console.print(
-            f"  [dim]• {trace_dir / 'generation_traces.jsonl'} - Individual entries[/dim]"
-        )
-        console.print(
-            f"  [dim]• {trace_dir / 'conversations.jsonl'} - Complete conversations[/dim]"
-        )
-        console.print(f"\n[dim]Inspect with: jq . {trace_dir / 'conversations.jsonl'} | less[/dim]")
+# NOTE: generate function moved to generation_commands.py
+# (see synthetic_data/cli/generation_commands.py for plan, filter-candidates, answer, curate, classify commands)
 
 
 def build(
@@ -2215,80 +1852,7 @@ def _export_items_to_jsonl(data: list, output_path: Path, stage: str):
             f.write("\n")
 
 
-def pipeline(
-    config_path: Path = typer.Option(..., "--config", "-c", help="Configuration file"),
-    no_cache: bool = typer.Option(False, "--no-cache", help="Disable cache usage"),
-    hub_id: Optional[str] = typer.Option(None, "--hub-id", "-h", help="HuggingFace Hub ID"),
-    token: Optional[str] = typer.Option(None, "--token", "-t", help="HuggingFace token"),
-    skip_analysis: bool = typer.Option(False, "--skip-analysis", help="Skip analysis step"),
-):
-    """Run the complete pipeline: parse -> transcribe -> filter-images -> chunk -> filter-chunks -> generate -> build -> export -> analyze."""
-    console.print(
-        Panel.fit(
-            "[bold cyan]Complete Pipeline[/bold cyan]\nRunning all steps sequentially",
-            title="Full Pipeline",
-        )
-    )
-
-    import time
-
-    start_time = time.time()
-
-    # Build steps list
-    steps = [
-        ("Parse", lambda: parse(config_path, no_cache, False)),
-        ("Transcribe", lambda: transcribe(config_path, no_cache)),
-        ("Filter Images", lambda: filter_images(config_path, no_cache)),
-        ("Chunk", lambda: chunk(config_path, no_cache)),
-        ("Filter Chunks", lambda: filter_quality(config_path, no_cache)),
-        ("Generate", lambda: generate(config_path, no_cache, enable_tracing=True)),
-        ("Build", lambda: build(config_path)),
-        ("Export", lambda: export(config_path, hub_id, token)),
-    ]
-
-    # Add analysis step if not skipped
-    if not skip_analysis:
-        # Analysis pushes to hub if hub_id provided
-        # Capture variables to avoid closure issues with lambdas
-        _hub_id = hub_id
-        _token = token
-        steps.append(
-            (
-                "Analyze",
-                lambda: analyze(
-                    config_path=config_path,
-                    source="splits",
-                    output_dir=None,
-                    no_plots=False,
-                    include_allocation=True,
-                    include_pipeline=True,
-                    hub_id=_hub_id,
-                    token=_token,
-                ),
-            )
-        )
-
-    for i, (step_name, step_func) in enumerate(steps, 1):
-        console.print(f"\n[bold]━━━ Step {i}/{len(steps)}: {step_name} ━━━[/bold]\n")
-        try:
-            step_func()
-        except Exception as e:
-            console.print(f"\n[red]✗ Pipeline failed at step {step_name}: {e}[/red]")
-            raise
-
-    elapsed = time.time() - start_time
-    minutes = int(elapsed // 60)
-    seconds = int(elapsed % 60)
-
-    console.print(
-        Panel.fit(
-            f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
-            f"All {len(steps)} steps completed successfully\n"
-            f"Total time: {minutes}m {seconds}s",
-            title="Success",
-            border_style="green",
-        )
-    )
+# NOTE: pipeline function moved to main.py
 
 
 def analyze_allocation(
@@ -2369,8 +1933,8 @@ def analyze_allocation(
         diversity_sweep = simulator.sweep_diversity_weight(target, type_configs)
         target_sweep = simulator.sweep_target_samples(type_configs)
 
-        over_alloc = getattr(config.generation, "over_allocation_factor", 1.8)
-        div_weight = getattr(config.generation, "diversity_weight", 0.4)
+        over_alloc = config.generation.over_allocation_factor
+        div_weight = config.generation.diversity_weight
         current_sim = simulator.simulate(
             target,
             type_configs,

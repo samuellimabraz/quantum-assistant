@@ -10,10 +10,16 @@ from .allocation import (
     TypeAllocationConfig,
 )
 from .category import CategoryClassifier
-from .pipeline import GenerationPipeline
-from .planner import InputCandidate, InputPlanner
 from .prompts import PromptSet, build_context
+from .types import InputCandidate
 from .sessions import AnswerBatchProcessor, AnswerResult, AnswerSession
+from .stages import (
+    AnswerStage,
+    ClassifyStage,
+    CurateStage,
+    FilterCandidatesStage,
+    PlanStage,
+)
 
 __all__ = [
     # Allocation
@@ -24,11 +30,17 @@ __all__ = [
     "DiversityTracker",
     "SampleTask",
     "TypeAllocationConfig",
-    # Pipeline
-    "CategoryClassifier",
-    "GenerationPipeline",
-    "InputPlanner",
+    # Types
     "InputCandidate",
+    # Generation stages
+    "AnswerStage",
+    "ClassifyStage",
+    "CurateStage",
+    "FilterCandidatesStage",
+    "PlanStage",
+    # Classification
+    "CategoryClassifier",
+    # Prompts
     "PromptSet",
     "build_context",
     # Sessions
