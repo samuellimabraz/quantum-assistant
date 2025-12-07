@@ -13,17 +13,15 @@ class ResultsManager:
     Organizes results into structured directories:
         outputs/evaluate/
         ├── qiskit-humaneval/
-        │   ├── gpt-oss-120b_n10_k1-5-10_20241125_143022.json
-        │   └── qwen2.5-coder-14b_n10_k1-5-10_20241125_150000.json
+        │   └── model_n10_k1-5-10_20241125_143022.json
         ├── qiskit-humaneval-hard/
         │   └── ...
         └── synthetic/
-            └── ...
+            └── model_n1_k1_20241125_150000.json
     """
 
     BASE_DIR = Path("outputs/evaluate")
 
-    # Dataset type to directory name mapping
     DATASET_DIRS = {
         "qiskit_humaneval": "qiskit-humaneval",
         "qiskit_humaneval_hard": "qiskit-humaneval-hard",
@@ -54,18 +52,10 @@ class ResultsManager:
 
     @classmethod
     def sanitize_model_name(cls, model_name: str) -> str:
-        """
-        Sanitize model name for use in filename.
-
-        Removes/replaces characters that are problematic in filenames.
-        """
-        # Replace slashes and backslashes with dashes
+        """Sanitize model name for use in filename."""
         sanitized = model_name.replace("/", "-").replace("\\", "-")
-        # Replace spaces and special chars with underscores
         sanitized = re.sub(r"[^\w\-.]", "_", sanitized)
-        # Remove consecutive underscores/dashes
         sanitized = re.sub(r"[-_]+", "-", sanitized)
-        # Remove leading/trailing dashes
         sanitized = sanitized.strip("-_")
         return sanitized.lower()
 
@@ -83,30 +73,14 @@ class ResultsManager:
 
         Format: {model}_{params}_{timestamp}.json
         Example: qwen2.5-coder-14b_n10_k1-5-10_20241125_143022.json
-
-        Args:
-            model_name: Name of the model being evaluated
-            num_samples_per_task: Number of solutions generated per task
-            k_values: K values used for Pass@k metrics
-            timestamp: Timestamp for the run (defaults to now)
-            suffix: Optional suffix to add before .json
-
-        Returns:
-            Generated filename
         """
         if timestamp is None:
             timestamp = datetime.now()
 
-        # Sanitize model name
         model = cls.sanitize_model_name(model_name)
-
-        # Format k values
         k_str = "-".join(str(k) for k in sorted(k_values))
-
-        # Format timestamp
         ts_str = timestamp.strftime("%Y%m%d_%H%M%S")
 
-        # Build filename components
         parts = [
             model,
             f"n{num_samples_per_task}",

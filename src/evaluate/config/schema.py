@@ -11,7 +11,6 @@ dotenv_path = find_dotenv(usecwd=True)
 if dotenv_path:
     load_dotenv(dotenv_path)
 else:
-    # Fallback: try to load from current working directory
     load_dotenv()
 
 
@@ -40,15 +39,20 @@ class DatasetConfig(BaseModel):
     """Configuration for dataset to evaluate."""
 
     type: str = Field(..., description="Dataset type: 'qiskit_humaneval' or 'synthetic'")
-    path: Path = Field(..., description="Path to dataset file")
+    path: Path = Field(..., description="Path to dataset file or HuggingFace dataset directory")
     images_dir: Path | None = Field(
-        default=None, description="Directory containing images (for synthetic)"
+        default=None, description="Directory containing images (for synthetic multimodal)"
     )
     max_samples: int | None = Field(default=None, ge=1, description="Limit number of samples")
-    # Qiskit HumanEval specific options
+    # Qiskit HumanEval specific
     dataset_variant: str | None = Field(
         default=None,
         description="Dataset variant: 'normal' (completion) or 'hard' (full generation). Auto-detected if None",
+    )
+    # Synthetic dataset specific
+    split: str = Field(
+        default="test",
+        description="Dataset split to evaluate (train, validation, test). For synthetic datasets.",
     )
 
 
@@ -59,15 +63,15 @@ class MetricsConfig(BaseModel):
     num_samples_per_task: int = Field(
         default=1, ge=1, description="Solutions per task (for pass@k)"
     )
-    k_values: list[int] = Field(default=[1, 5, 10], description="K values for Pass@k")
+    k_values: list[int] = Field(default=[1], description="K values for Pass@k")
     execution_timeout: int = Field(default=30, ge=5, le=300, description="Code execution timeout")
 
     # Generation concurrency
     max_concurrent: int = Field(
-        default=10, ge=1, le=50, description="Maximum concurrent API requests"
+        default=10, ge=1, le=100, description="Maximum concurrent API requests"
     )
 
-    # Text evaluation
+    # Text evaluation (for synthetic QA)
     num_predictions: int = Field(default=1, ge=1, description="Predictions per sample")
 
     # System prompt configuration
@@ -79,7 +83,7 @@ class MetricsConfig(BaseModel):
         default=None, description="Custom system prompt (used when system_prompt_type is 'custom')"
     )
 
-    # Canonical solution verification (for debugging evaluation setup)
+    # Canonical solution verification (for debugging)
     verify_canonical: bool = Field(
         default=False, description="Also verify that canonical solutions pass their tests"
     )
@@ -90,7 +94,7 @@ class OutputConfig(BaseModel):
 
     results_file: Path | None = Field(
         default=None,
-        description="Explicit path to save results JSON. If None, auto-generated in outputs/evaluate/",
+        description="Explicit path to save results JSON. If None, auto-generated in results_dir",
     )
     results_dir: Path = Field(
         default=Path("outputs/evaluate"),
@@ -124,7 +128,6 @@ class EvaluationConfig(BaseModel):
         """Save configuration to YAML file."""
         import yaml
 
-        # Convert Path objects to strings for YAML serialization
         data = self.model_dump(mode="python")
 
         def convert_paths(obj):
