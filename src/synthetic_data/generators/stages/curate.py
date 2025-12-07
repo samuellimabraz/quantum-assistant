@@ -161,8 +161,8 @@ class CurateStage:
                 question_type=sample.question_type,
                 has_image="yes" if sample.image_path else "no",
                 has_test="yes" if sample.test_code else "no",
-                context_preview=context_preview[:800] if context_preview else "N/A",
-                image_description=image_description[:500] if image_description else "N/A",
+                context_preview=context_preview[:1400] if context_preview else "N/A",
+                image_description=image_description[:1000] if image_description else "N/A",
             )
 
             curation_batches.append(

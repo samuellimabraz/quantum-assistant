@@ -117,7 +117,9 @@ class PromptsConfig(BaseModel):
     function_completion_prompt: str = ""
     code_generation_prompt: str = ""
     qa_prompt: str = ""
+    question_refinement_prompt: str = ""
     test_generation_prompt: str = ""
+    test_correction_prompt: str = ""
 
     # === ANSWER GENERATION SESSION ===
     answer_generation_system: str = ""

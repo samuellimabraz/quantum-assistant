@@ -252,7 +252,7 @@ class AnswerStage:
         """Create a Sample from candidate and answer."""
         metadata = dict(candidate.chunk.metadata) if candidate.chunk.metadata else {}
 
-        context_preview = candidate.chunk.text[:800] if candidate.chunk.text else ""
+        context_preview = candidate.chunk.text if candidate.chunk.text else ""
         metadata["context_preview"] = context_preview
 
         if candidate.target_image and candidate.target_image.transcription:

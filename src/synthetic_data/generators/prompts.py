@@ -59,7 +59,9 @@ class PromptSet:
     function_completion_prompt: str = ""
     code_generation_prompt: str = ""
     qa_prompt: str = ""
+    question_refinement_prompt: str = ""
     test_generation_prompt: str = ""
+    test_correction_prompt: str = ""
 
     # === ANSWER GENERATION SESSION PROMPTS ===
     answer_generation_system: str = ""
@@ -94,6 +96,23 @@ class PromptSet:
             QuestionType.QA: self.qa_prompt,
         }
         return mapping.get(question_type, self.qa_prompt)
+
+    def get_refinement_prompt(
+        self, question: str, question_type: QuestionType, has_image: bool
+    ) -> str:
+        """Get the question refinement prompt."""
+        return self.question_refinement_prompt.format(
+            question=question,
+            question_type=question_type.value,
+            has_image="yes" if has_image else "no",
+        )
+
+    def get_test_correction_prompt(self, error_type: str, error_message: str) -> str:
+        """Get the test correction prompt."""
+        return self.test_correction_prompt.format(
+            error_type=error_type,
+            error_message=error_message,
+        )
 
     def get_input_system_prompt(self, use_image: bool = False) -> str:
         """Get system prompt for input generation session."""

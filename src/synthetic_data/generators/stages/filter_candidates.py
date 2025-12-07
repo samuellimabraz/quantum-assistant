@@ -152,8 +152,8 @@ class FilterCandidatesStage:
                 has_image="yes" if candidate.is_multimodal else "no",
                 has_test="yes" if candidate.test_code else "no",
                 context_preview=(
-                    candidate.context[:1000] + "..."
-                    if len(candidate.context) > 1000
+                    candidate.context[:2200] + "..."
+                    if len(candidate.context) > 2200
                     else candidate.context
                 ),
             )

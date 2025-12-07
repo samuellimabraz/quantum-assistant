@@ -96,6 +96,13 @@ prompts:
     - If context contains working Qiskit code, use it as-is or adapt it minimally
     - The context includes: document text, code blocks, image transcriptions, and related code
 
+    CRITICAL FOR MULTIMODAL (images from code output):
+    - If [PRIORITY - Code That Generated Target Image] is present, that code is your PRIMARY reference
+    - The image shows the OUTPUT of that code - focus on the CODE pattern, not image details
+    - If code uses loops (for i in range...), do NOT enumerate each iteration
+    - If code uses library functions (efficient_su2, z_feature_map), reference those functions
+    - DO NOT describe images layer-by-layer when a simple function call suffices
+
     STRICT QUALITY CONTROL:
     - REJECT trivial Python tasks (sorting, string manipulation)
     - Base all tasks on context; don't invent anything.
@@ -131,25 +138,45 @@ prompts:
     Question: {question}
     Entry point: {entry_point}
 
+    CRITICAL - GROUND TESTS IN CONTEXT:
+    - Test logic MUST be based on patterns from the conversation context
+    - DO NOT invent test patterns, parameter mappings, or assertions not in context
+    - If context shows `efficient_su2(4, su2_gates=["rx"], ...)`, test should verify THAT specific configuration
+    - If context uses simple loops for circuit construction, test should reflect that simplicity
+    - DO NOT add complex parameter binding schemes unless context explicitly shows them
+    - Prefer simple structural checks (num_qubits, gate types) over complex operator comparisons when context is simple
+
     CRITICAL QISKIT 2.0 TEST PATTERNS:
     - Use assign_parameters() NOT bind_parameters()
     - For parametrized circuits, ALWAYS bind parameters before Operator(): 
       `bound = circuit.assign_parameters({{param: value}}); Operator(bound)`
     - Use Statevector.equiv() and Operator.equiv() for quantum object comparisons
-    - Use circuit.find_bit(qubit) NOT qubit.index
     - Use numpy.allclose() for numerical comparisons
     - For measurement results, check distribution patterns, not exact counts
+
+    CRITICAL - circuit.find_bit() API (Qiskit 2.0):
+    - circuit.find_bit(qubit) returns a BitLocations object with .index attribute
+    - To get index: circuit.find_bit(qubit).index (NOT find_bit(qubit)[1])
+    - RIGHT: q_idx = circuit.find_bit(qubit).index
 
     CRITICAL - CircuitInstruction API (circuit.data[i]):
     - circuit.data[i] is a CircuitInstruction object with .operation, .qubits, .clbits
     - Access qubits: circuit.data[i].qubits (NOT .operation.qubits)
     - Access clbits: circuit.data[i].clbits (NOT .operation.clbits)
     - Access operation: circuit.data[i].operation (for .name, .params, etc.)
-    - WRONG: meas.operation.clbits → RIGHT: meas.clbits
-    - WRONG: meas.operation.qubits → RIGHT: meas.qubits
-    - DO NOT use .to_mutable() or modify qc.data directly
 
-    QISKIT HUMANEVAL TEST EXAMPLES:
+    FORBIDDEN IMPORTS (DO NOT USE):
+    - from qiskit.primitives import Sampler → use StatevectorSampler
+    - from qiskit.primitives import Estimator → use StatevectorEstimator
+    - from qiskit.primitives import BaseSampler → REMOVED
+    - from qiskit.primitives import BaseEstimator → REMOVED
+    - from qiskit.opflow → REMOVED
+    - from qiskit.pulse → REMOVED
+
+    FEATURE MAP CONSTRAINTS:
+    - zz_feature_map requires at least 2 qubits (feature_dimension >= 2)
+
+    QISKIT HUMANEVAL TEST EXAMPLES (use as FORMAT reference only, NOT as test logic to copy):
 
     EXAMPLE 1 - Basic circuit (from Qiskit HumanEval/0):
     ```python
@@ -233,6 +260,40 @@ prompts:
     check(create_ghz)
     ```
 
+    EXAMPLE 7 - Correct find_bit usage:
+    ```python
+    from qiskit import QuantumCircuit
+    def check(candidate):
+        circuit = candidate()
+        assert isinstance(circuit, QuantumCircuit)
+        meas = circuit.data[-1]
+        assert meas.operation.name == "measure"
+        q_idx = circuit.find_bit(meas.qubits[0]).index
+        c_idx = circuit.find_bit(meas.clbits[0]).index
+        assert q_idx == 0
+        assert c_idx == 0
+    check(create_measure_circuit)
+    ```
+
+    EXAMPLE 8 - Library circuit (simple structural check):
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.circuit.library import efficient_su2
+    def check(candidate):
+        circuit = candidate()
+        assert isinstance(circuit, QuantumCircuit)
+        assert circuit.num_qubits == 4
+        ref = efficient_su2(4, su2_gates=["rx"], entanglement="linear", reps=1)
+        assert circuit.num_parameters == ref.num_parameters
+    check(create_ansatz)
+    ```
+
+    IMPORTANT - Avoid test over-engineering:
+    - Prefer simple structural checks (num_qubits, num_parameters, gate names)
+    - Only use Operator comparison when context explicitly requires unitary equivalence
+    - DO NOT add parameter binding schemes unless the context code shows them
+    - Match test complexity to question complexity
+
     REQUIREMENTS:
     - Include ALL imports at top
     - Use check(candidate) pattern exactly
@@ -246,6 +307,40 @@ prompts:
 
     Return ONLY a single Python code block with the complete test.
 
+  test_correction_prompt: |
+    Your test code has a {error_type} error:
+
+    {error_message}
+
+    COMMON ISSUES AND FIXES:
+
+    SyntaxError:
+    - Check for missing colons, parentheses, or brackets
+    - Ensure proper indentation (4 spaces)
+    - Remove any markdown formatting
+
+    ImportError/ModuleNotFoundError:
+    - from qiskit.primitives import Sampler -> use StatevectorSampler
+    - from qiskit.primitives import Estimator -> use StatevectorEstimator
+    - from qiskit.test -> use qiskit_ibm_runtime.fake_provider
+    - from qiskit.opflow -> REMOVED, use qiskit.quantum_info
+    - from qiskit.pulse -> REMOVED in Qiskit 2.0
+    - from qiskit import execute -> REMOVED, use primitives
+
+    Deprecated API patterns:
+    - .bind_parameters() -> use .assign_parameters()
+    - .operation.qubits -> use instruction.qubits directly
+    - .operation.clbits -> use instruction.clbits directly
+    - qubit.index -> use circuit.find_bit(qubit).index
+    - .c_if() -> use QuantumCircuit.if_test()
+
+    Test structure issues:
+    - Must have check(candidate) function with assertions
+    - Must call check(entry_point) at the end
+    - For parametrized circuits: bind parameters before Operator()
+
+    Fix the error and return ONLY the corrected Python code block.
+
   # =============================================================================
   # ANSWER GENERATION SESSION PROMPTS
   # =============================================================================
@@ -255,19 +350,23 @@ prompts:
     You are a Qiskit quantum computing expert providing reference solutions.
     Your mission is to help create high-quality Qiskit code grounded in the provided context.
 
-    CRITICAL: BASE ALL SOLUTIONS ON CONTEXT
+    CRITICAL: BASE ALL SOLUTIONS ON CONTEXT CODE
     - The context contains document text, code examples, and image transcriptions
-    - Use code patterns and implementations directly from the context when possible
-    - DO NOT invent new implementations - base your solution only in context 
-    - If context shows Qiskit code, adapt it to the task requirements
+    - Use code patterns and implementations DIRECTLY from the context
+    - If [Code That Generated Target Image] is present, use THAT code as your primary reference
+    - DO NOT invent new implementations, workarounds, or unusual patterns
+    - If context uses simple loops, your solution should use simple loops (not enumerated gate-by-gate)
+    - If context shows `efficient_su2(...)`, use `efficient_su2(...)` - don't manually build it
 
-    STRICT QUALITY CONTROL:
-    - REJECT trivial Python tasks (sorting, string manipulation)
-    - Base all tasks on context; don't invent anything.
-    - Be objective and direct; don't be verbose.
+    FORBIDDEN PATTERNS:
+    - DO NOT use MethodType or monkey-patching
+    - DO NOT override __init__ or built-in methods
+    - DO NOT invent custom wrappers around standard operations
+    - DO NOT add code that's not present in or derivable from context
+    - If test expects specific behavior not in context, the TEST may be wrong
 
     SESSION FLOW:
-    1. Generate a solution based on context
+    1. Generate a solution based on context code patterns
     2. If validation fails, you receive the error and correct your solution
     3. Continue until the solution passes
 
@@ -502,11 +601,12 @@ prompts:
     - Ensure code is executable and passes the test
 
     FOR MULTIMODAL TASKS:
-    - PRIORITIZE the [Code That Generated Target Image] section if present
+    - PRIORITIZE [PRIORITY - Code That Generated Target Image] if present
     - This code shows EXACTLY what produces the visualization
-    - Your implementation should match this code, not other code in context
-    - If the task says "shown in the image", implement what THAT code does
-    - Prioriteze the code than the target image description
+    - Your implementation should MATCH this code pattern
+    - If context uses `efficient_su2(...)`, use that - don't manually build gates
+    - If context uses loops, use loops - don't enumerate each element
+    - DO NOT invent workarounds like MethodType, monkey-patching, or custom wrappers
 
     Return ONLY Python code (no markdown, no explanations).
 
@@ -588,12 +688,12 @@ prompts:
     {context}
 
     CRITICAL RULES:
-    1. Base the task on code patterns and examples from the context
-    2. Extract function patterns from context code
+    1. Base the task on code patterns from the context
+    2. If [PRIORITY - Code That Generated Target Image] is present, use THAT code pattern
     3. DO NOT invent new functionality not present in context
     4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally
-    5. Prioriteze the code than the target image description
-    6. DO NOT describe the image details in the task
+    5. If context uses library functions (efficient_su2, z_feature_map, etc.), include them
+    6. DO NOT describe the image layer-by-layer in docstring
 
     FORMAT: A function stub with imports, signature, docstring, and `pass`.
 
@@ -658,17 +758,17 @@ prompts:
 
     MULTIMODAL DOCSTRING GUIDELINES:
     - Reference image naturally: "shown in the image", "in the diagram", "as depicted"
-    - Include only KEY implementation details from context code
-    - DO NOT describe every gate/element - the user has the image
-    ✓ GOOD: "Implement the quantum circuit shown in the image."
+    - Include only KEY details (e.g., "4-qubit efficient_su2 ansatz", "36-qubit VQC")
+    - DO NOT describe every gate/layer - the user has the image
+    ✓ GOOD: "Implement the efficient_su2 ansatz circuit shown in the image."
     ✓ GOOD: "Create the 2-qubit Bell state circuit in the diagram."
-    ✗ BAD: "Create a circuit with H on q0, CNOT from q0 to q1, as shown in image..."
+    ✗ BAD: "Create a circuit with H on q0, P(2*x[0]) on q0, H on q0, P(2*x[1]) on q0..."
 
     CRITICAL - TARGET IMAGE ALIGNMENT:
-    - Try focus on the code that generated the target image first.
-    - If [Code That Generated Target Image] is provided, use THAT specific code as your priority reference
-    - Do NOT base your function on code that appears AFTER the target image in context
-    - If dont have the target image code, focus on [TARGET IMAGE] and the rest of context.
+    - If [PRIORITY - Code That Generated Target Image] is provided, use THAT code pattern
+    - If context uses `efficient_su2(4, su2_gates=["rx"], ...)`, mention that in docstring
+    - If context uses loops, do NOT enumerate each iteration in docstring
+    - Match docstring complexity to context code complexity
 
     REQUIREMENTS:
     - Include ALL necessary imports at the top
@@ -679,6 +779,53 @@ prompts:
 
     Return ONLY the Python code block.
 
+  question_refinement_prompt: |
+    Review and refine your generated question/task to ensure it meets all requirements.
+
+    Original Question:
+    {question}
+
+    Question Type: {question_type}
+    Has Image: {has_image}
+
+    REFINEMENT CHECKLIST:
+
+    1. CONTEXT GROUNDING:
+       - Is the question/task answerable from the provided context?
+       - Does it use concepts, patterns, or code from the context?
+       - For code tasks: can the implementation be derived from context code?
+
+    2. FORMAT COMPLIANCE:
+       - function_completion: Must be a complete stub with imports, signature, docstring, and `pass`
+       - code_generation: Must be natural language task ending with function specification
+       - qa: Must be a conceptual question (no code implementation required)
+
+    3. MULTIMODAL ALIGNMENT (if has_image=yes):
+       - Does the question reference the image naturally ("shown in the image", "in the diagram")?
+       - CRITICAL: Does it avoid layer-by-layer image description?
+       - Is the task about what the TARGET IMAGE shows, not other context content?
+       - For code output images: focus on the CODE that generated it, not the visual result
+
+    4. AVOID OVER-DESCRIPTION (CRITICAL for multimodal):
+       - BAD: "The circuit has H on q0, then P(2.0*x[0]), then H again, then P(2.0*x[1]), then RZ..."
+       - GOOD: "Implement the variational circuit shown in the image"
+       - BAD: Describing each gate/layer individually when a simple loop would suffice
+       - GOOD: Reference the pattern or algorithm name if context provides it
+       - If [Code That Generated Target Image] uses loops, the question should NOT enumerate each element
+
+    5. SELF-CONTAINED:
+       - Can someone understand the question without seeing the context?
+       - No references to "the context", "the provided code", or "above"
+
+    6. QISKIT 2.0 COMPLIANCE:
+       - No deprecated APIs (bind_parameters, execute, transpile function)
+       - Correct import paths
+
+    If the question meets all requirements, return it unchanged.
+    If it needs refinement, return the improved version.
+
+    Return ONLY the refined question/task (no explanations, no markdown unless function_completion).
+
   code_generation_prompt: |
     Create a code generation task in Qiskit HumanEval Hard format based EXCLUSIVELY on the context.
 
@@ -687,9 +834,11 @@ prompts:
 
     CRITICAL RULES:
     1. Base the task on code patterns and examples from the context
-    2. Extract implementation patterns from context code
+    2. If [PRIORITY - Code That Generated Target Image] is present, base your task on THAT code
     3. DO NOT invent new functionality not present in context
-    4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally. DO NOT describe the image in the task. Prioriteze the code than the target image description
+    4. For multimodal: Use the CONTEXT CODE as reference, not the visual image description
+    5. If context code uses loops (e.g., `for i in range(size)`), do NOT enumerate each iteration in task
+    6. If context uses library functions (e.g., `efficient_su2(...)`), reference THAT function
 
     FORMAT: Natural language task + function specification.
     Pattern: [Task in 1-2 sentences] You must implement this using a function named `name` with [no arguments / the following arguments: ...].
@@ -724,16 +873,16 @@ prompts:
 
     MULTIMODAL TASK GUIDELINES:
     - Reference image naturally: "shown in the image", "in the diagram", "as depicted"
-    - Include only KEY details from context (e.g., "3-qubit GHZ", "Bell state", "Deutsch-Jozsa algorithm")
-    - DO NOT describe the image details in the task
-    - Prioriteze the code than the target image description
+    - Include only KEY details (e.g., "4-qubit", "Bell state", "VQC ansatz")
+    - DO NOT describe the image layer-by-layer or gate-by-gate
+    - Focus on WHAT the code does, not HOW the image looks
 
     CRITICAL - TARGET IMAGE ALIGNMENT:
-    - Your task MUST be about what is shown in [TARGET IMAGE], not other parts of context
-    - If [Code That Generated Target Image] is provided, base your task on THAT specific code
-    - Do NOT create tasks about code/content that appears AFTER the target image
-    - The target image visualization is the PRIMARY focus of your task
-    - If the image shows H-T-H gates, the task should be about H-T-H, not H-T-H-T from later code
+    - If [PRIORITY - Code That Generated Target Image] is provided, base task on THAT code
+    - If code uses `efficient_su2(4, su2_gates=["rx"], ...)`, task should mention that pattern
+    - If code uses loops like `for i in range(36): circuit.ry(...)`, do NOT enumerate 36 gates
+    - BAD: "Create circuit with H on q0, P(2*x[0]) on q0, H on q0, P(2*x[1]) on q0..."
+    - GOOD: "Implement the variational circuit shown in the image using the pattern from context"
 
     REQUIREMENTS:
     - 1-2 sentences task description
@@ -1034,8 +1183,9 @@ prompts:
     - The question doesn't match the question type format
     - The input have image and the question doesn't reference elements of the image
     - The question is too vague or cannot be verified
-    - The input mentions something that is not understood by the input 
+    - The input mentions something that is not understood just by the question 
     - The question describes many details of the image, citing for example all the details, gates, etc.
+    - The question is not answerable from the context provided
 
     Respond in this format:
     DECISION: PASS/REJECT
@@ -1145,7 +1295,7 @@ prompts:
     REASON: Brief explanation
 
 generation:
-  target_samples: 75 # Final dataset target
+  target_samples: 8000
 
   question_model: question-model
   vision_model: vision-model
@@ -1214,7 +1364,7 @@ generation:
 
   enable_code_verification: true
   code_verification_max_iterations: 7
-  code_verification_timeout: 60
+  code_verification_timeout: 80
   code_verification_concurrency: 10
   skip_ibm_service_validation: false
 

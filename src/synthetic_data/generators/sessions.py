@@ -26,6 +26,33 @@ IBM_SERVICE_ERROR_PATTERNS = [
     "_verify_credentials",
 ]
 
+DEPRECATED_API_PATTERNS = [
+    (r"qubits\[\d*\]\.index\b", "Qubit.index removed - use circuit.find_bit(qubit).index"),
+    (r"clbits\[\d*\]\.index\b", "Clbit.index removed - use circuit.find_bit(clbit).index"),
+    (r"\bq\.index\b(?!\.)", "Qubit.index removed - use circuit.find_bit(q).index"),
+    (r"\bqb\.index\b(?!\.)", "Qubit.index removed - use circuit.find_bit(qb).index"),
+    (r"\.c_if\s*\(", "c_if removed - use QuantumCircuit.if_test() context manager"),
+    (r"\.quasi_dists\b", "quasi_dists removed - use result.data for sampler results"),
+    (r"\.true_body\b", "IfElseOp.true_body removed - use .blocks[0]"),
+    (r"\.false_body\b", "IfElseOp.false_body removed - use .blocks[1]"),
+    (r"from\s+qiskit\.opflow", "qiskit.opflow removed - use qiskit.quantum_info"),
+    (r"from\s+qiskit\.pulse", "qiskit.pulse removed in Qiskit 2.0"),
+    (r"from\s+qiskit\s+import\s+.*\bpulse\b", "qiskit.pulse removed in Qiskit 2.0"),
+    (r"\.bind_parameters\s*\(", "bind_parameters deprecated - use assign_parameters"),
+    (r"qiskit\.execute\s*\(", "qiskit.execute removed - use Sampler or Estimator"),
+    (r"\.qasm\s*\(", "qasm() removed - use qasm2.dumps() or qasm3.dumps()"),
+]
+
+
+def _check_deprecated_apis(code: str) -> Optional[tuple[str, str]]:
+    if not code:
+        return None
+    for pattern, message in DEPRECATED_API_PATTERNS:
+        match = re.search(pattern, code)
+        if match:
+            return (pattern, message)
+    return None
+
 
 def _get_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -294,7 +321,6 @@ class AnswerSession:
 
         current_answer = answer
 
-        # Log the test code being used
         if self.tracer and self._conversation:
             self.tracer.log_entry(
                 stage="answer_generation",
@@ -305,7 +331,16 @@ class AnswerSession:
             )
 
         for iteration in range(self.max_iterations):
-            test_result = await self._run_test_async(current_answer)
+            deprecated = _check_deprecated_apis(current_answer)
+            if deprecated:
+                _, message = deprecated
+                test_result = ValidationResult(
+                    passed=False,
+                    error_type="deprecated_api",
+                    error_message=f"Code uses deprecated Qiskit 2.0 API: {message}",
+                )
+            else:
+                test_result = await self._run_test_async(current_answer)
 
             if self.tracer and self._conversation:
                 self.tracer.log_entry(
@@ -743,7 +778,7 @@ print("TEST_PASSED")
         if not non_empty_lines:
             return body_lines
 
-        first_idx, first_line = non_empty_lines[0]
+        _, first_line = non_empty_lines[0]
         first_indent = len(first_line) - len(first_line.lstrip())
         first_stripped = first_line.strip()
 

@@ -74,7 +74,9 @@ class PlanStage:
             function_completion_prompt=self.config.prompts.function_completion_prompt,
             code_generation_prompt=self.config.prompts.code_generation_prompt,
             qa_prompt=self.config.prompts.qa_prompt,
+            question_refinement_prompt=self.config.prompts.question_refinement_prompt,
             test_generation_prompt=self.config.prompts.test_generation_prompt,
+            test_correction_prompt=self.config.prompts.test_correction_prompt,
         )
 
     @property
@@ -161,8 +163,7 @@ class PlanStage:
         checkpoint: Optional[PlanCheckpoint],
         progress_callback=None,
     ) -> tuple[list[InputCandidate], AllocationMetrics]:
-        """Generate candidates from chunks."""
-        # Allocate tasks
+        """Generate candidates using unified session-based processing."""
         if checkpoint and checkpoint.tasks:
             tasks = checkpoint.tasks
             allocation_result = AllocationResult(
@@ -183,7 +184,6 @@ class PlanStage:
             console.print(f"[cyan]Allocated {len(tasks)} tasks[/cyan]")
             self._log_allocation(allocation_result)
 
-        # Build contexts
         tasks_with_context = []
         for task in tasks:
             context = task.chunk.build_context_with_transcriptions(
@@ -192,277 +192,255 @@ class PlanStage:
             )
             tasks_with_context.append((task, context))
 
-        # Estimate total work (questions + expected tests for code types)
-        code_task_count = sum(
-            1
-            for task, _ in tasks_with_context
-            if task.question_type
-            in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION)
-        )
-        total_work = len(tasks_with_context) + code_task_count
-
-        # Set progress total
         if progress_callback and hasattr(progress_callback, "set_total"):
-            progress_callback.set_total(total_work)
+            progress_callback.set_total(len(tasks_with_context))
 
-        # Phase 1: Generate questions
         skip_indices = set(checkpoint.processed_indices) if checkpoint else set()
         existing_candidates = list(checkpoint.candidates) if checkpoint else []
 
-        completed_count = [0]
-
-        def question_callback(completed: int):
-            completed_count[0] = completed
-            if progress_callback:
-                if hasattr(progress_callback, "update"):
-                    progress_callback.update(completed)
-                else:
-                    progress_callback(completed)
-
-        candidates = await self._generate_questions_async(
+        candidates = await self._process_tasks_async(
             tasks_with_context,
             llm_client,
+            tasks,
             skip_indices,
             existing_candidates,
-            tasks,
-            question_callback,
+            progress_callback,
         )
-
-        # Phase 2: Generate tests for code candidates
-        code_candidates = [
-            (i, c)
-            for i, c in enumerate(candidates)
-            if c.is_valid
-            and c.question_type in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION)
-        ]
-
-        if code_candidates:
-            base_progress = completed_count[0]
-
-            def test_callback(completed: int):
-                total_completed = base_progress + completed
-                if progress_callback:
-                    if hasattr(progress_callback, "update"):
-                        progress_callback.update(total_completed)
-                    else:
-                        progress_callback(total_completed)
-
-            candidates = await self._generate_tests_async(
-                candidates,
-                code_candidates,
-                llm_client,
-                tasks,
-                test_callback,
-            )
 
         return candidates, allocation_result.metrics
 
-    async def _generate_questions_async(
+    async def _process_tasks_async(
         self,
         tasks_with_context: list[tuple[SampleTask, str]],
         llm_client: LLMClient,
+        tasks: list[SampleTask],
         skip_indices: set[int],
         existing_candidates: list[InputCandidate],
-        tasks: list[SampleTask],
         progress_callback=None,
     ) -> list[InputCandidate]:
-        """Generate questions for all tasks."""
+        """Process all tasks with unified question+refinement+test generation per task."""
         candidates: list[Optional[InputCandidate]] = [None] * len(tasks_with_context)
 
-        # Fill existing
         for idx, candidate in enumerate(existing_candidates):
             if idx < len(candidates):
                 candidates[idx] = candidate
 
-        # Build message batches
-        task_indices = []
-        message_batches = []
-
-        for idx, (task, context) in enumerate(tasks_with_context):
-            if idx in skip_indices:
-                continue
-
-            task_indices.append(idx)
-            use_image = task.is_multimodal
-            system_prompt = self.prompts.get_input_system_prompt(use_image=use_image)
-            question_prompt = self.prompts.get_question_prompt(task.question_type).format(
-                context=context
-            )
-            message_batches.append(
-                [
-                    Message(role="system", content=system_prompt),
-                    Message(role="user", content=question_prompt),
-                ]
-            )
-
-        if not message_batches:
-            return [c for c in candidates if c is not None]
-
-        # Set total for progress tracking
-        if progress_callback and hasattr(progress_callback, "set_total"):
-            progress_callback.set_total(len(message_batches))
-
-        # Track progress with checkpoint saving
+        semaphore = asyncio.Semaphore(self.gen_config.llm_concurrency)
+        completed_count = [0]
         checkpoint_interval = 20
         last_checkpoint = [0]
+        lock = asyncio.Lock()
 
-        def update_callback(completed: int):
-            if progress_callback:
-                if hasattr(progress_callback, "update"):
-                    progress_callback.update(completed)
-                else:
-                    progress_callback(completed)
+        async def process_task(idx: int, task: SampleTask, context: str) -> None:
+            if idx in skip_indices:
+                return
 
-            # Save checkpoint periodically
-            if completed - last_checkpoint[0] >= checkpoint_interval or completed == len(
-                message_batches
-            ):
-                processed_so_far = set(skip_indices)
-                for i in range(completed):
-                    idx = task_indices[i]
-                    processed_so_far.add(idx)
+            async with semaphore:
+                candidate = await self._generate_single_candidate_async(task, context, llm_client)
 
-                checkpoint_state = PlanCheckpoint(
-                    tasks=tasks,
-                    candidates=[c for c in candidates if c is not None],
-                    processed_indices=list(processed_so_far),
-                    phase="questions",
-                )
-                self._save_checkpoint(checkpoint_state)
-                last_checkpoint[0] = completed
+            async with lock:
+                candidates[idx] = candidate
+                completed_count[0] += 1
 
-        responses = await llm_client.generate_batch_async(
-            message_batches,
-            max_concurrent=self.gen_config.llm_concurrency,
-            temperature=1.0,
-            progress_callback=update_callback,
+                if progress_callback:
+                    if hasattr(progress_callback, "update"):
+                        progress_callback.update(completed_count[0])
+                    else:
+                        progress_callback(completed_count[0])
+
+                if completed_count[0] - last_checkpoint[0] >= checkpoint_interval:
+                    processed = set(skip_indices)
+                    for i in range(len(candidates)):
+                        if candidates[i] is not None:
+                            processed.add(i)
+
+                    checkpoint_state = PlanCheckpoint(
+                        tasks=tasks,
+                        candidates=[c for c in candidates if c is not None],
+                        processed_indices=list(processed),
+                        phase="complete",
+                    )
+                    self._save_checkpoint(checkpoint_state)
+                    last_checkpoint[0] = completed_count[0]
+
+        processing_tasks = [
+            process_task(idx, task, context)
+            for idx, (task, context) in enumerate(tasks_with_context)
+        ]
+        await asyncio.gather(*processing_tasks)
+
+        checkpoint_state = PlanCheckpoint(
+            tasks=tasks,
+            candidates=[c for c in candidates if c is not None],
+            processed_indices=list(range(len(candidates))),
+            phase="complete",
         )
-
-        # Process responses
-        for resp_idx, response in enumerate(responses):
-            task_idx = task_indices[resp_idx]
-            task, context = tasks_with_context[task_idx]
-
-            question = response.strip() if response else ""
-
-            if not question:
-                candidate = InputCandidate(
-                    chunk=task.chunk,
-                    question="",
-                    question_type=task.question_type,
-                    target_image=task.target_image,
-                    context=context,
-                    score=task.score,
-                    rejection_reason="Empty question generated",
-                )
-            else:
-                entry_point = None
-                if task.question_type in (
-                    QuestionType.FUNCTION_COMPLETION,
-                    QuestionType.CODE_GENERATION,
-                ):
-                    entry_point = self._extract_entry_point(question) or "solution"
-
-                candidate = InputCandidate(
-                    chunk=task.chunk,
-                    question=question,
-                    question_type=task.question_type,
-                    entry_point=entry_point,
-                    target_image=task.target_image,
-                    context=context,
-                    score=task.score,
-                )
-
-            candidates[task_idx] = candidate
-
-        # Save final checkpoint (covered by update_callback at completion)
+        self._save_checkpoint(checkpoint_state)
 
         return [c for c in candidates if c is not None]
 
-    async def _generate_tests_async(
+    async def _generate_single_candidate_async(
         self,
-        candidates: list[InputCandidate],
-        code_candidates: list[tuple[int, InputCandidate]],
+        task: SampleTask,
+        context: str,
         llm_client: LLMClient,
-        tasks: list[SampleTask],
-        progress_callback=None,
-    ) -> list[InputCandidate]:
-        """Generate tests for code-type candidates."""
-        # Build test generation messages
-        test_batches = []
-        test_indices = []
-
-        for idx, candidate in code_candidates:
-            if candidate.test_code:  # Already has test
-                continue
-
-            test_indices.append(idx)
-            use_image = candidate.is_multimodal
-            system_prompt = self.prompts.get_input_system_prompt(use_image=use_image)
-            question_prompt = self.prompts.get_question_prompt(candidate.question_type).format(
-                context=candidate.context
-            )
-            test_prompt = self.prompts.test_generation_prompt.format(
-                question=candidate.question,
-                entry_point=candidate.entry_point,
-            )
-
-            test_batches.append(
-                [
-                    Message(role="system", content=system_prompt),
-                    Message(role="user", content=question_prompt),
-                    Message(role="assistant", content=candidate.question),
-                    Message(role="user", content=test_prompt),
-                ]
-            )
-
-        if not test_batches:
-            return candidates
-
-        # Track for checkpoint saving
-        checkpoint_interval = 20
-        last_checkpoint = [0]
-
-        def test_callback(completed: int):
-            if progress_callback:
-                progress_callback(completed)
-
-            # Save checkpoint periodically
-            if completed - last_checkpoint[0] >= checkpoint_interval or completed == len(
-                test_batches
-            ):
-                checkpoint_state = PlanCheckpoint(
-                    tasks=tasks,
-                    candidates=[c for c in candidates if c is not None],
-                    processed_indices=list(range(len(candidates))),
-                    phase="tests",
-                )
-                self._save_checkpoint(checkpoint_state)
-                last_checkpoint[0] = completed
-
-        responses = await llm_client.generate_batch_async(
-            test_batches,
-            max_concurrent=self.gen_config.llm_concurrency,
-            temperature=1.0,
-            progress_callback=test_callback,
+    ) -> InputCandidate:
+        """Generate a single candidate with question refinement and test correction."""
+        use_image = task.is_multimodal
+        system_prompt = self.prompts.get_input_system_prompt(use_image=use_image)
+        question_prompt = self.prompts.get_question_prompt(task.question_type).format(
+            context=context
         )
 
-        # Process test responses
-        for resp_idx, response in enumerate(responses):
-            candidate_idx = test_indices[resp_idx]
-            candidate = candidates[candidate_idx]
+        messages = [
+            Message(role="system", content=system_prompt),
+            Message(role="user", content=question_prompt),
+        ]
 
-            test_code = self._extract_code(response)
-            if test_code:
-                validation_error = self._validate_test_structure(test_code, candidate.entry_point)
-                if validation_error is None:
-                    candidates[candidate_idx].test_code = test_code
-                else:
-                    candidates[candidate_idx].rejection_reason = f"Invalid test: {validation_error}"
-            else:
-                candidates[candidate_idx].rejection_reason = "Empty test code generated"
+        try:
+            initial_question = await llm_client.generate_async(messages, temperature=1.0)
+        except Exception:
+            return InputCandidate(
+                chunk=task.chunk,
+                question="",
+                question_type=task.question_type,
+                target_image=task.target_image,
+                context=context,
+                score=task.score,
+                rejection_reason="Failed to generate question",
+            )
 
-        return candidates
+        initial_question = initial_question.strip() if initial_question else ""
+        if not initial_question:
+            return InputCandidate(
+                chunk=task.chunk,
+                question="",
+                question_type=task.question_type,
+                target_image=task.target_image,
+                context=context,
+                score=task.score,
+                rejection_reason="Empty question generated",
+            )
+
+        messages.append(Message(role="assistant", content=initial_question))
+
+        refinement_prompt = self.prompts.get_refinement_prompt(
+            question=initial_question,
+            question_type=task.question_type,
+            has_image=use_image,
+        )
+        messages.append(Message(role="user", content=refinement_prompt))
+
+        try:
+            refined_question = await llm_client.generate_async(messages, temperature=0.7)
+            refined_question = refined_question.strip() if refined_question else initial_question
+        except Exception:
+            refined_question = initial_question
+
+        if not refined_question:
+            refined_question = initial_question
+
+        messages.append(Message(role="assistant", content=refined_question))
+
+        entry_point = None
+        if task.question_type in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION):
+            entry_point = self._extract_entry_point(refined_question) or "solution"
+
+        candidate = InputCandidate(
+            chunk=task.chunk,
+            question=refined_question,
+            question_type=task.question_type,
+            entry_point=entry_point,
+            target_image=task.target_image,
+            context=context,
+            score=task.score,
+        )
+
+        if task.question_type in (QuestionType.FUNCTION_COMPLETION, QuestionType.CODE_GENERATION):
+            candidate = await self._generate_test_for_candidate_async(
+                candidate, messages, llm_client
+            )
+
+        return candidate
+
+    async def _generate_test_for_candidate_async(
+        self,
+        candidate: InputCandidate,
+        messages: list[Message],
+        llm_client: LLMClient,
+    ) -> InputCandidate:
+        """Generate and validate test for a code candidate with correction loop."""
+        max_corrections = 3
+
+        test_prompt = self.prompts.test_generation_prompt.format(
+            question=candidate.question,
+            entry_point=candidate.entry_point,
+        )
+        messages.append(Message(role="user", content=test_prompt))
+
+        try:
+            test_response = await llm_client.generate_async(messages, temperature=1.0)
+        except Exception:
+            candidate.rejection_reason = "Failed to generate test"
+            return candidate
+
+        test_code = self._extract_code(test_response)
+        if not test_code:
+            candidate.rejection_reason = "Empty test code generated"
+            return candidate
+
+        messages.append(Message(role="assistant", content=test_response))
+
+        for attempt in range(max_corrections + 1):
+            validation_error = self._validate_test_structure(test_code, candidate.entry_point)
+
+            if validation_error is None:
+                candidate.test_code = test_code
+                return candidate
+
+            if attempt >= max_corrections:
+                candidate.rejection_reason = (
+                    f"Invalid test after {max_corrections} corrections: {validation_error}"
+                )
+                return candidate
+
+            error_type = self._classify_test_error(validation_error)
+            correction_prompt = self.prompts.get_test_correction_prompt(
+                error_type=error_type,
+                error_message=validation_error,
+            )
+            messages.append(Message(role="user", content=correction_prompt))
+
+            try:
+                correction_response = await llm_client.generate_async(messages, temperature=0.7)
+            except Exception:
+                candidate.rejection_reason = f"Failed test correction at attempt {attempt + 1}"
+                return candidate
+
+            new_test_code = self._extract_code(correction_response)
+            if not new_test_code:
+                candidate.rejection_reason = "Empty test code after correction"
+                return candidate
+
+            messages.append(Message(role="assistant", content=correction_response))
+            test_code = new_test_code
+
+        return candidate
+
+    def _classify_test_error(self, error_message: str) -> str:
+        """Classify the type of test validation error."""
+        error_lower = error_message.lower()
+        if "syntax" in error_lower:
+            return "SyntaxError"
+        if "import" in error_lower or "module" in error_lower:
+            return "ImportError"
+        if "deprecated" in error_lower:
+            return "DeprecatedAPI"
+        if "check" in error_lower or "test" in error_lower:
+            return "StructureError"
+        if "assert" in error_lower:
+            return "AssertionError"
+        return "ValidationError"
 
     def _build_allocation_config(self) -> AllocationConfig:
         """Build allocation config from generation config."""
@@ -672,7 +650,12 @@ class PlanStage:
             (r"from\s+qiskit\s+import\s+.*execute", "execute removed - use primitives"),
             (r"\.operation\.qubits", "use circuit_instruction.qubits not .operation.qubits"),
             (r"\.operation\.clbits", "use circuit_instruction.clbits not .operation.clbits"),
-            (r"\.index(?!\w)", "Qubit.index removed - use circuit.find_bit()"),
+            (r"qubits\[\d*\]\.index\b", "Qubit.index removed - use circuit.find_bit(qubit).index"),
+            (r"clbits\[\d*\]\.index\b", "Clbit.index removed - use circuit.find_bit(clbit).index"),
+            (r"\bq\.index\b(?!\.)", "Qubit.index removed - use circuit.find_bit(q).index"),
+            (r"\bqb\.index\b(?!\.)", "Qubit.index removed - use circuit.find_bit(qb).index"),
+            (r"\bqubit\.index\b", "Qubit.index removed - use circuit.find_bit(qubit).index"),
+            (r"\bclbit\.index\b", "Clbit.index removed - use circuit.find_bit(clbit).index"),
             (r"\.c_if\s*\(", "c_if removed - use if_test or QuantumCircuit.if_test"),
             (r"\.quasi_dists", "quasi_dists removed - use result.data structure"),
             (
