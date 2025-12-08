@@ -7,11 +7,13 @@ dependencies = [
     "ms-swift>=3.10.3",
     "transformers>=4.57.0",
     "torch>=2.8.0",
+    "torchvision>=0.23.0",
     "qwen_vl_utils>=0.0.14",
     "decord>=0.6.0",
     "librosa>=0.11.0",
     "icecream>=2.1.8",
     "hf_transfer>=0.1.9",
+    "wandb>=0.23.1"
 ]
 
 [project.optional-dependencies]

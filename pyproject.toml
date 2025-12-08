@@ -22,7 +22,7 @@ dependencies = [
     "rich>=13.0.0",
     "pymupdf>=1.23.0",
     "python-dotenv>=1.0.0",
-    "qiskit>=2.2.3",
+    "qiskit==2.2.3",
     "scipy>=1.15.3",
     "pytest>=9.0.0",
     "wand>=0.6.13",
@@ -47,9 +47,14 @@ dependencies = [
     "yfinance>=0.2.66",
     "qiskit-ibm-transpiler>=0.13.1",
     "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
-    "ms-swift>=3.10.3",
     "plotly>=6.5.0",
     "kaleido>=1.2.0",
+    "pylatexenc>=2.10",
+    "qiskit-addon-opt-mapper>=0.1.0",
+    "qiskit-ibm-catalog>=0.12.0",
+    "qiskit-addon-cutting>=0.10.0",
+    "seaborn>=0.13.2",
+    "ffsim>=0.0.63",
 ]
 
 [project.optional-dependencies]

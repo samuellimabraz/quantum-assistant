@@ -51,6 +51,8 @@ Flash-attn must be installed separately due to compilation time (~10 minutes):
 ```bash
 # After installing finetune
 uv pip install flash-attn --no-build-isolation
+
+uv pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.4.11/flash_attn-2.8.3%2Bcu129torch2.8-cp312-cp312-linux_x86_64.whl
 ```
 
 ## Usage
