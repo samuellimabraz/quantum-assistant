@@ -47,8 +47,6 @@ dependencies = [
     "yfinance>=0.2.66",
     "qiskit-ibm-transpiler>=0.13.1",
     "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
-    "pysat>=3.2.2",
-    "python-sat>=1.8.dev24",
     "ms-swift>=3.10.3",
     "plotly>=6.5.0",
     "kaleido>=1.2.0",
@@ -80,3 +78,9 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501"]
+
+[tool.uv.workspace]
+members = [
+    "src/finetune",
+]
+

@@ -10,6 +10,30 @@ Prepare quantum computing datasets for VLM fine-tuning with ms-swift framework.
 - **Multimodal Support**: Handle text-only and image+text samples
 - **System Prompts**: Configurable quantum computing expert prompts
 
+## Installation
+
+### Standard Installation
+
+```bash
+# From project root
+uv sync --package finetune
+
+# Or with GPU acceleration libraries
+uv sync --package finetune --extra gpu
+```
+
+### Flash Attention (Optional - for GPU training)
+
+Flash-attn must be installed separately due to compilation requirements:
+
+```bash
+# After installing finetune, install flash-attn
+uv pip install flash-attn --no-build-isolation
+
+# Or with regular pip
+pip install flash-attn --no-build-isolation
+```
+
 ## Quick Start
 
 ```bash
