@@ -1,0 +1,106 @@
+# =============================================================================
+# Experiment: DoRA + rsLoRA
+# Weight-Decomposed Low-Rank Adaptation
+# Decomposes weights into magnitude and direction - often best final quality
+# =============================================================================
+
+# Model Configuration
+model: Qwen/Qwen3-VL-2B-Instruct
+model_name: Qwen3-VL-2B-Instruct-dora
+model_author: samuellimabraz
+
+# Dataset Configuration
+dataset:
+  - ./outputs/quantum-assistant/train.jsonl
+val_dataset:
+  - ./outputs/quantum-assistant/validation.jsonl
+load_from_cache_file: true
+data_seed: 42
+
+# Model Precision & Attention
+torch_dtype: bfloat16
+bf16: true
+fp16: false
+attn_impl: flash_attn
+
+# Tokenization & Sequence Settings
+padding_side: left
+padding_free: true
+lazy_tokenize: true
+max_new_tokens: 4096
+max_pixels: 1003520
+
+# LoRA Configuration
+train_type: lora
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules: all-linear
+init_weights: 'true'        # Standard initialization
+use_rslora: true            # Rank-stabilized scaling
+use_dora: true              # DoRA: magnitude-direction decomposition
+
+# Freeze settings
+freeze_llm: false
+freeze_vit: true
+freeze_aligner: true
+
+# Training Configuration
+output_dir: ./outputs/train/exp-dora
+
+# Optimization
+learning_rate: 2e-4
+lr_scheduler_type: cosine
+optim: adamw_torch
+weight_decay: 0.01
+
+# Batch & Accumulation
+per_device_train_batch_size: 16
+gradient_accumulation_steps: 2
+torch_empty_cache_steps: 50
+
+# Epochs & Steps
+num_train_epochs: 1
+warmup_steps: 10
+warmup_ratio: 0.05
+
+# Memory Optimization
+gradient_checkpointing: true
+
+# Evaluation Configuration
+per_device_eval_batch_size: 8
+eval_accumulation_steps: 4
+eval_strategy: steps
+eval_steps: 20
+metric_for_best_model: eval_loss
+load_best_model_at_end: true
+fp16_full_eval: true
+
+# Saving Configuration
+save_strategy: steps
+save_steps: 50
+save_total_limit: 3
+
+# Logging Configuration
+logging_first_step: true
+logging_steps: 5
+logging_strategy: steps
+report_to:
+  - wandb
+  - tensorboard
+
+# Project & Run naming
+project: quantum-assistant
+run_name: exp-dora
+
+# Data Loading
+dataloader_num_workers: 8
+dataset_num_proc: 8
+remove_unused_columns: false
+
+# HuggingFace Hub Configuration
+use_hf: true
+push_to_hub: false
+hub_private_repo: true
+hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-dora
+
