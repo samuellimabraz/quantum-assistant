@@ -9,7 +9,7 @@ description = "Clean synthetic dataset generation pipeline"
 authors = [
     {name = "Samuel", email = "samuellimabraz@gmail.com"}
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
@@ -30,7 +30,7 @@ dependencies = [
     "qiskit-machine-learning>=0.8.2",
     "qiskit-ibm-runtime>=0.43.1",
     "qiskit-aer>=0.17.2",
-    "torch>=2.9.1",
+    "torch>=2.8.0,<2.9.0",
     "qiskit-addon-sqd>=0.12.0",
     "qiskit-addon-pna>=0.2.0",
     "qiskit-addon-slc>=0.1.0",
@@ -55,6 +55,7 @@ dependencies = [
     "qiskit-addon-cutting>=0.10.0",
     "seaborn>=0.13.2",
     "ffsim>=0.0.63",
+    "finetune",  # workspace member - includes all finetune dependencies
 ]
 
 [project.optional-dependencies]
@@ -74,15 +75,18 @@ where = ["src"]
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311"]
+target-version = ["py312"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501"]
+
+[tool.uv.sources]
+finetune = { workspace = true }
 
 [tool.uv.workspace]
 members = [
