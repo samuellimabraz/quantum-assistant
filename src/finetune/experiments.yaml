@@ -6,74 +6,121 @@
 #   Example: ./scripts/experiment.sh pissa
 # =============================================================================
 
+# =============================================================================
+# Initial Experiments: Compare PEFT methods (1 epoch, r=16)
+# =============================================================================
+
 # Baseline: rsLoRA with standard initialization
 rslora:
-  model_name: Qwen3-VL-2B-Instruct-rslora
+  model_name: Qwen3-VL-8B-rslora
   output_dir: ./outputs/train/exp-rslora
-  run_name: exp-rslora
-  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-rslora
-  # LoRA settings (using base defaults)
+  run_name: Qwen3-VL-8B-rslora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora
+  # LoRA settings
   init_weights: "true"
   use_rslora: true
   use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
 
 # PiSSA: SVD-based initialization (faster convergence)
 pissa:
-  model_name: Qwen3-VL-2B-Instruct-pissa
+  model_name: Qwen3-VL-8B-pissa
   output_dir: ./outputs/train/exp-pissa
-  run_name: exp-pissa
-  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-pissa
+  run_name: Qwen3-VL-8B-pissa
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-pissa
   # LoRA settings
   init_weights: "pissa"
   use_rslora: true
   use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
 
 # OLoRA: QR orthonormal initialization (stable training)
 olora:
-  model_name: Qwen3-VL-2B-Instruct-olora
+  model_name: Qwen3-VL-8B-olora
   output_dir: ./outputs/train/exp-olora
-  run_name: exp-olora
-  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-olora
+  run_name: Qwen3-VL-8B-olora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-olora
   # LoRA settings
   init_weights: "olora"
   use_rslora: true
   use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
 
 # DoRA: magnitude-direction decomposition (best quality)
 dora:
-  model_name: Qwen3-VL-2B-Instruct-dora
+  model_name: Qwen3-VL-8B-dora
   output_dir: ./outputs/train/exp-dora
-  run_name: exp-dora
-  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-dora
+  run_name: Qwen3-VL-8B-dora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-dora
   # LoRA settings
   init_weights: "true"
   use_rslora: true
   use_dora: true
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
 
 # =============================================================================
-# Additional experiments 
+# Ablation Experiments
 # =============================================================================
 
+# Ablation: freeze aligner (compare multimodal learning)
 rslora_frozen_aligner:
-  model_name: Qwen3-VL-2B-Instruct-rslora-frozen
+  model_name: Qwen3-VL-8B-rslora-frozen
   output_dir: ./outputs/train/exp-rslora-frozen
-  run_name: exp-rslora-frozen
-  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-rslora-frozen
-  freeze_aligner: true  # Freeze aligner (baseline comparison)
+  run_name: Qwen3-VL-8B-rslora-frozen
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora-frozen
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+  # Freeze settings (aligner frozen for comparison)
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: true
 
-# Higher rank experiment
-# rslora_r32:
-#   model_name: Qwen3-VL-2B-Instruct-rslora-r32
-#   output_dir: ./outputs/train/exp-rslora-r32
-#   run_name: exp-rslora-r32
+# =============================================================================
+# Final Run Templates (uncomment after selecting best method)
+# =============================================================================
+
+# Final run with best method - 2 epochs
+# final_2ep:
+#   model_name: Qwen3-VL-8B-final
+#   output_dir: ./outputs/train/exp-final
+#   run_name: Qwen3-VL-8B-final-2ep
+#   hub_model_id: samuellimabraz/Qwen3-VL-8B-Instruct-quantum
+#   num_train_epochs: 2
+#   save_strategy: best
+#   init_weights: "pissa"  # Copy best method
+#   use_rslora: true
+#   use_dora: false
+#   freeze_llm: false
+#   freeze_vit: true
+#   freeze_aligner: false
+
+# Final run with higher rank - r=32
+# final_r32:
+#   model_name: Qwen3-VL-8B-final-r32
+#   output_dir: ./outputs/train/exp-final-r32
+#   run_name: Qwen3-VL-8B-final-r32
+#   hub_model_id: samuellimabraz/Qwen3-VL-8B-Instruct-quantum-r32
 #   lora_rank: 32
 #   lora_alpha: 64
-
-# Multi-epoch final run (after selecting best method)
-# final:
-#   model_name: Qwen3-VL-2B-Instruct-final
-#   output_dir: ./outputs/train/exp-final
-#   run_name: exp-final
-#   num_train_epochs: 3
+#   num_train_epochs: 2
 #   save_strategy: best
-
+#   init_weights: "pissa"  # Copy best method
+#   use_rslora: true
+#   use_dora: false
+#   freeze_llm: false
+#   freeze_vit: true
+#   freeze_aligner: false

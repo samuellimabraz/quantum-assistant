@@ -6,7 +6,7 @@
 # -----------------------------------------------------------------------------
 # Model Configuration
 # -----------------------------------------------------------------------------
-model: Qwen/Qwen3-VL-2B-Instruct
+model: Qwen/Qwen3-VL-8B-Instruct
 model_author: samuellimabraz
 
 # System Prompt (consistent with evaluation)
@@ -43,21 +43,15 @@ max_new_tokens: 4096
 max_pixels: 1003520
 
 # -----------------------------------------------------------------------------
-# LoRA Configuration (defaults - override per experiment)
+# LoRA Configuration (common settings)
+# NOTE: Experiment-specific params (init_weights, use_rslora, use_dora, freeze_*)
+#       are defined in experiments.yaml
 # -----------------------------------------------------------------------------
 train_type: lora
 lora_rank: 16
 lora_alpha: 32
 lora_dropout: 0.05
-target_modules: all-linear
-init_weights: 'true'
-use_rslora: true
-use_dora: false
-
-# Freeze settings
-freeze_llm: false
-freeze_vit: true
-freeze_aligner: false 
+target_modules: all-linear 
 
 # Component-specific learning rates (optional, uncomment to use)
 # aligner_lr: 1e-4     # Lower than main LR for stable training
@@ -100,7 +94,7 @@ fp16_full_eval: true
 # Saving Configuration
 # -----------------------------------------------------------------------------
 save_strategy: steps
-save_steps: 50
+save_steps: 40
 save_total_limit: 3
 
 # -----------------------------------------------------------------------------

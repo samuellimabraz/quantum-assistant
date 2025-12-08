@@ -23,6 +23,7 @@ EXPERIMENTS_FILE="${PROJECT_ROOT}/src/finetune/experiments.yaml"
 EXPERIMENT_NAME=""
 EXPORT_MODEL=false
 PUSH_TO_HUB=false
+PUSH_ARTIFACTS_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -35,8 +36,17 @@ while [[ $# -gt 0 ]]; do
             PUSH_TO_HUB=true
             shift
             ;;
+        --push-artifacts)
+            PUSH_ARTIFACTS_ONLY=true
+            shift
+            ;;
         -h|--help)
-            head -15 "$0" | tail -10
+            echo "Usage: $0 <experiment_name> [--export] [--push] [--push-artifacts]"
+            echo ""
+            echo "Options:"
+            echo "  --export          Merge LoRA weights after training"
+            echo "  --push            Merge + push model to HuggingFace Hub"
+            echo "  --push-artifacts  Only upload training artifacts (no training)"
             echo ""
             echo "Available experiments:"
             grep -E "^[a-z_]+:" "$EXPERIMENTS_FILE" | sed 's/://' | sed 's/^/  - /'
@@ -179,6 +189,7 @@ export_experiment() {
     fi
     
     echo "[experiment] Checkpoint: $best_checkpoint"
+    echo "[experiment] Training run: $latest_run"
     
     local merged_dir="${PROJECT_ROOT}/outputs/merged/${model_name}"
     
@@ -199,12 +210,120 @@ export_experiment() {
             --hub_model_id "$hub_model_id"
             --hub_private_repo true
         )
-        echo "[experiment] Will push to: https://huggingface.co/$hub_model_id"
+        echo "[experiment] Will push merged model to: https://huggingface.co/$hub_model_id"
     fi
     
     "${export_cmd[@]}"
     
     echo "[experiment] Merged model: $merged_dir"
+    
+    # Upload training artifacts if pushing to hub
+    if [[ "$PUSH_TO_HUB" == "true" && -n "$hub_model_id" ]]; then
+        upload_training_artifacts "$hub_model_id" "$latest_run" "$exp_name"
+    fi
+}
+
+push_artifacts_only() {
+    local exp_name="$1"
+    
+    echo "=============================================="
+    echo "[experiment] Pushing artifacts only: $exp_name"
+    echo "=============================================="
+    
+    # Get experiment config
+    local output_dir hub_model_id
+    output_dir=$(python3 -c "import yaml; d=yaml.safe_load(open('$EXPERIMENTS_FILE')); print(d['$exp_name'].get('output_dir', ''))")
+    hub_model_id=$(python3 -c "import yaml; d=yaml.safe_load(open('$EXPERIMENTS_FILE')); print(d['$exp_name'].get('hub_model_id', ''))")
+    
+    if [[ -z "$hub_model_id" ]]; then
+        echo "[error] No hub_model_id found for $exp_name"
+        return 1
+    fi
+    
+    # Find latest run
+    local latest_run
+    latest_run=$(ls -td "${PROJECT_ROOT}/${output_dir#./}"/v*/ 2>/dev/null | head -1)
+    
+    if [[ -z "$latest_run" ]]; then
+        echo "[error] No training output found for $exp_name in ${output_dir}"
+        return 1
+    fi
+    
+    echo "[experiment] Found run: $latest_run"
+    echo "[experiment] Hub repo: $hub_model_id"
+    
+    upload_training_artifacts "$hub_model_id" "$latest_run" "$exp_name"
+}
+
+upload_training_artifacts() {
+    local hub_model_id="$1"
+    local training_run_dir="$2"
+    local exp_name="$3"
+    
+    echo ""
+    echo "=============================================="
+    echo "[experiment] Uploading training artifacts..."
+    echo "=============================================="
+    echo "[experiment] Repo: $hub_model_id"
+    echo "[experiment] Source: $training_run_dir"
+    
+    # Get the run version name (e.g., v0-20251208-191800)
+    local run_version
+    run_version=$(basename "$training_run_dir")
+    local artifacts_path="training_artifacts/${run_version}"
+    
+    # Create a temporary directory with all artifacts to upload in one commit
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    local artifacts_dir="${temp_dir}/${artifacts_path}"
+    mkdir -p "$artifacts_dir"
+    
+    # Copy training artifacts
+    echo "[experiment] Collecting artifacts..."
+    
+    # Training logs
+    [[ -f "${training_run_dir}/logging.jsonl" ]] && \
+        cp "${training_run_dir}/logging.jsonl" "$artifacts_dir/"
+    
+    # Arguments/config
+    [[ -f "${training_run_dir}/args.json" ]] && \
+        cp "${training_run_dir}/args.json" "$artifacts_dir/"
+    
+    # Trainer state
+    [[ -f "${training_run_dir}/trainer_state.json" ]] && \
+        cp "${training_run_dir}/trainer_state.json" "$artifacts_dir/"
+    
+    # Training images (loss curves, etc.)
+    [[ -d "${training_run_dir}/images" ]] && \
+        cp -r "${training_run_dir}/images" "$artifacts_dir/"
+    
+    # TensorBoard runs
+    [[ -d "${training_run_dir}/runs" ]] && \
+        cp -r "${training_run_dir}/runs" "$artifacts_dir/"
+    
+    # Copy experiment configs
+    cp "$EXPERIMENTS_FILE" "$artifacts_dir/experiments.yaml"
+    cp "$BASE_CONFIG" "$artifacts_dir/base.yaml"
+    
+    echo "[experiment] Artifacts collected:"
+    ls -la "$artifacts_dir"
+    
+    # Upload all artifacts in one commit using huggingface-cli
+    echo "[experiment] Uploading to HuggingFace Hub..."
+    uv run --no-sync huggingface-cli upload \
+        "$hub_model_id" \
+        "$artifacts_dir" \
+        "$artifacts_path" \
+        --repo-type model \
+        --commit-message "Add training artifacts for ${run_version}"
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    
+    echo "=============================================="
+    echo "[experiment] Artifacts uploaded successfully!"
+    echo "[experiment] View at: https://huggingface.co/$hub_model_id/tree/main/$artifacts_path"
+    echo "=============================================="
 }
 
 #=============================================================================
@@ -220,7 +339,14 @@ echo "[experiment] CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 echo "[experiment] NPROC_PER_NODE: $NPROC_PER_NODE"
 echo "[experiment] Export: $EXPORT_MODEL"
 echo "[experiment] Push to Hub: $PUSH_TO_HUB"
+echo "[experiment] Push artifacts only: $PUSH_ARTIFACTS_ONLY"
 echo "----------------------------------------------"
+
+# Handle push-artifacts-only mode
+if [[ "$PUSH_ARTIFACTS_ONLY" == "true" ]]; then
+    push_artifacts_only "$EXPERIMENT_NAME"
+    exit 0
+fi
 
 if [[ "$EXPERIMENT_NAME" == "all" ]]; then
     # Run all experiments
@@ -235,4 +361,3 @@ fi
 echo "=============================================="
 echo "[experiment] All done!"
 echo "=============================================="
-
