@@ -1,0 +1,79 @@
+# =============================================================================
+# PEFT Experiments Configuration
+# Each experiment overrides base.yaml with specific parameters
+# 
+# Usage: ./scripts/experiment.sh <experiment_name>
+#   Example: ./scripts/experiment.sh pissa
+# =============================================================================
+
+# Baseline: rsLoRA with standard initialization
+rslora:
+  model_name: Qwen3-VL-2B-Instruct-rslora
+  output_dir: ./outputs/train/exp-rslora
+  run_name: exp-rslora
+  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-rslora
+  # LoRA settings (using base defaults)
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+
+# PiSSA: SVD-based initialization (faster convergence)
+pissa:
+  model_name: Qwen3-VL-2B-Instruct-pissa
+  output_dir: ./outputs/train/exp-pissa
+  run_name: exp-pissa
+  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-pissa
+  # LoRA settings
+  init_weights: "pissa"
+  use_rslora: true
+  use_dora: false
+
+# OLoRA: QR orthonormal initialization (stable training)
+olora:
+  model_name: Qwen3-VL-2B-Instruct-olora
+  output_dir: ./outputs/train/exp-olora
+  run_name: exp-olora
+  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-olora
+  # LoRA settings
+  init_weights: "olora"
+  use_rslora: true
+  use_dora: false
+
+# DoRA: magnitude-direction decomposition (best quality)
+dora:
+  model_name: Qwen3-VL-2B-Instruct-dora
+  output_dir: ./outputs/train/exp-dora
+  run_name: exp-dora
+  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-dora
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: true
+  use_dora: true
+
+# =============================================================================
+# Additional experiments 
+# =============================================================================
+
+rslora_frozen_aligner:
+  model_name: Qwen3-VL-2B-Instruct-rslora-frozen
+  output_dir: ./outputs/train/exp-rslora-frozen
+  run_name: exp-rslora-frozen
+  hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-rslora-frozen
+  freeze_aligner: true  # Freeze aligner (baseline comparison)
+
+# Higher rank experiment
+# rslora_r32:
+#   model_name: Qwen3-VL-2B-Instruct-rslora-r32
+#   output_dir: ./outputs/train/exp-rslora-r32
+#   run_name: exp-rslora-r32
+#   lora_rank: 32
+#   lora_alpha: 64
+
+# Multi-epoch final run (after selecting best method)
+# final:
+#   model_name: Qwen3-VL-2B-Instruct-final
+#   output_dir: ./outputs/train/exp-final
+#   run_name: exp-final
+#   num_train_epochs: 3
+#   save_strategy: best
+

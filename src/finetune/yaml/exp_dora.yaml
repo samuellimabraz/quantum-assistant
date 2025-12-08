@@ -9,6 +9,12 @@ model: Qwen/Qwen3-VL-2B-Instruct
 model_name: Qwen3-VL-2B-Instruct-dora
 model_author: samuellimabraz
 
+# System Prompt (matches evaluation prompt for consistency)
+system: |
+  You are a quantum computing expert assistant specializing in Qiskit.
+  Provide accurate, clear, and well-structured responses about quantum computing concepts,
+  algorithms, and code implementation. Use Qiskit 2.0 best practices.
+
 # Dataset Configuration
 dataset:
   - ./outputs/quantum-assistant/train.jsonl

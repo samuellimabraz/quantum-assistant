@@ -1,15 +1,15 @@
 # =============================================================================
-# Swift Fine-tuning Configuration for Quantum Assistant
-# Model: Qwen3-VL-2B-Instruct with LoRA
+# Base Configuration for Quantum Assistant Fine-tuning
+# All experiments inherit from this file
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Model Configuration
 # -----------------------------------------------------------------------------
 model: Qwen/Qwen3-VL-2B-Instruct
-model_name: Qwen3-VL-2B-Instruct-r16-rslora-bf16-tuned
 model_author: samuellimabraz
 
+# System Prompt (consistent with evaluation)
 system: |
   You are a quantum computing expert assistant specializing in Qiskit.
   Provide accurate, clear, and well-structured responses about quantum computing concepts,
@@ -31,7 +31,7 @@ data_seed: 42
 torch_dtype: bfloat16
 bf16: true
 fp16: false
-attn_impl: flash_attn  # Options: flash_attn, sdpa, eager
+attn_impl: flash_attn
 
 # -----------------------------------------------------------------------------
 # Tokenization & Sequence Settings
@@ -39,32 +39,33 @@ attn_impl: flash_attn  # Options: flash_attn, sdpa, eager
 padding_side: left
 padding_free: true
 lazy_tokenize: true
-# max_length: 8192
 max_new_tokens: 4096
-max_pixels: 1003520  # 1280 * 28 * 28
-temperature: 0.0
+max_pixels: 1003520
 
 # -----------------------------------------------------------------------------
-# LoRA Configuration
+# LoRA Configuration (defaults - override per experiment)
 # -----------------------------------------------------------------------------
 train_type: lora
-lora_rank: 8
-lora_alpha: 16
+lora_rank: 16
+lora_alpha: 32
 lora_dropout: 0.05
 target_modules: all-linear
 init_weights: 'true'
 use_rslora: true
+use_dora: false
 
 # Freeze settings
 freeze_llm: false
 freeze_vit: true
-freeze_aligner: true
+freeze_aligner: false 
+
+# Component-specific learning rates (optional, uncomment to use)
+# aligner_lr: 1e-4     # Lower than main LR for stable training
+# vit_lr: 1e-5         # Only if training ViT (not recommended)
 
 # -----------------------------------------------------------------------------
 # Training Configuration
 # -----------------------------------------------------------------------------
-output_dir: ./outputs/train/Qwen3-VL-2B-Instruct-r16-rslora-bf16-tuned
-
 # Optimization
 learning_rate: 2e-4
 lr_scheduler_type: cosine
@@ -83,7 +84,6 @@ warmup_ratio: 0.05
 
 # Memory Optimization
 gradient_checkpointing: true
-# vit_gradient_checkpointing: false
 
 # -----------------------------------------------------------------------------
 # Evaluation Configuration
@@ -99,9 +99,9 @@ fp16_full_eval: true
 # -----------------------------------------------------------------------------
 # Saving Configuration
 # -----------------------------------------------------------------------------
-save_strategy: best
-save_steps: 20
-save_total_limit: 5
+save_strategy: steps
+save_steps: 50
+save_total_limit: 3
 
 # -----------------------------------------------------------------------------
 # Logging Configuration
@@ -113,9 +113,8 @@ report_to:
   - wandb
   - tensorboard
 
-# Project & Run naming
+# Project naming
 project: quantum-assistant
-run_name: Qwen3-VL-2B-Instruct-r16-rslora-bf16-tuned
 
 # -----------------------------------------------------------------------------
 # Data Loading
@@ -130,8 +129,4 @@ remove_unused_columns: false
 use_hf: true
 push_to_hub: false
 hub_private_repo: true
-hub_model_id: samuellimabraz/Qwen3-VL-2B-Instruct-r16-rslora-bf16-tuned
-
-# Early stopping
-early_stop_interval: 3
 
