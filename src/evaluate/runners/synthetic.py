@@ -3,7 +3,7 @@
 import asyncio
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +52,41 @@ class SampleResult:
     reference_answer: str
     metrics: dict[str, float]
     success: bool
+
+
+@dataclass
+class CanonicalVerification:
+    """Result of canonical solution verification."""
+
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    failures: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def pass_rate(self) -> float:
+        return self.passed / self.total if self.total > 0 else 0.0
+
+
+@dataclass
+class ModalityMetrics:
+    """Metrics breakdown by modality (text-only vs multimodal)."""
+
+    count: int = 0
+    success_rate: float = 0.0
+    pass_at_1: float | None = None
+    rouge_l: float | None = None
+    bleu: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result = {"count": self.count, "success_rate": self.success_rate}
+        if self.pass_at_1 is not None:
+            result["pass@1"] = self.pass_at_1
+        if self.rouge_l is not None:
+            result["rouge_l"] = self.rouge_l
+        if self.bleu is not None:
+            result["bleu"] = self.bleu
+        return result
 
 
 class SyntheticDatasetRunner:
@@ -214,16 +249,123 @@ class SyntheticDatasetRunner:
         pattern = rf"def\s+{re.escape(entry_point)}\s*\("
         return bool(re.search(pattern, code))
 
+    def _extract_code_from_markdown(self, text: str) -> str:
+        """Extract code from markdown code block if present."""
+        match = re.search(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
+        return match.group(1).rstrip() if match else text.rstrip()
+
+    def _assemble_function_completion(self, stub: str, body: str) -> str:
+        """
+        Assemble function completion by replacing pass with body.
+
+        This matches the logic in synthetic_data/generators/sessions.py
+        to ensure canonical verification uses the same assembly method.
+        """
+        # Extract code from markdown if present
+        stub_code = self._extract_code_from_markdown(stub)
+        body_code = self._extract_code_from_markdown(body)
+
+        # Find the pass statement and its indentation
+        stub_lines = stub_code.split("\n")
+        result_lines = []
+        replaced = False
+
+        for line in stub_lines:
+            stripped = line.strip()
+            if stripped == "pass" and not replaced:
+                # Get the indentation of the pass statement
+                pass_indent = len(line) - len(line.lstrip())
+
+                # Normalize body indentation and insert
+                body_lines = body_code.split("\n")
+                normalized = self._normalize_body_indentation(body_lines, pass_indent)
+
+                for body_line in normalized:
+                    result_lines.append(body_line)
+                replaced = True
+            else:
+                result_lines.append(line)
+
+        if not replaced:
+            # No pass found - append body with default indent
+            result_lines.append("")
+            body_lines = body_code.split("\n")
+            for body_line in body_lines:
+                if body_line.strip():
+                    result_lines.append("    " + body_line.lstrip())
+                else:
+                    result_lines.append("")
+
+        return "\n".join(result_lines)
+
+    def _normalize_body_indentation(self, body_lines: list[str], target_indent: int) -> list[str]:
+        """
+        Normalize body indentation to target level.
+
+        Handles the common case where the body has inconsistent indentation:
+        - First line has 0 indentation
+        - Subsequent lines have 4 spaces (relative to what should be 0)
+
+        This normalizes all lines to use target_indent as the base.
+        """
+        non_empty = [(i, line) for i, line in enumerate(body_lines) if line.strip()]
+        if not non_empty:
+            return body_lines
+
+        # Get first non-empty line's indentation
+        first_idx, first_line = non_empty[0]
+        first_indent = len(first_line) - len(first_line.lstrip())
+
+        # Check for the common pattern: first line at 0, rest at 4
+        if first_indent == 0 and len(non_empty) > 1:
+            subsequent_indents = [len(line) - len(line.lstrip()) for _, line in non_empty[1:]]
+            min_subsequent = min(subsequent_indents) if subsequent_indents else 0
+
+            # If subsequent lines have extra indentation, they should align with first line
+            if min_subsequent > 0:
+                # All lines should be at target_indent base
+                result = []
+                for i, line in enumerate(body_lines):
+                    if not line.strip():
+                        result.append("")
+                    elif i == first_idx:
+                        # First line gets target indent
+                        result.append(" " * target_indent + line.lstrip())
+                    else:
+                        # Subsequent lines: remove extra base indent, add target
+                        current_indent = len(line) - len(line.lstrip())
+                        relative = current_indent - min_subsequent
+                        new_indent = " " * (target_indent + relative)
+                        result.append(new_indent + line.lstrip())
+                return result
+
+        # Standard case: subtract min indent and add target
+        min_indent = min(len(line) - len(line.lstrip()) for _, line in non_empty)
+
+        result = []
+        for line in body_lines:
+            if not line.strip():
+                result.append("")
+            else:
+                current_indent = len(line) - len(line.lstrip())
+                relative_indent = current_indent - min_indent
+                new_indent = " " * (target_indent + relative_indent)
+                result.append(new_indent + line.lstrip())
+
+        return result
+
     def combine_code(self, sample: dict[str, Any], generated: str) -> str:
         """
         Combine prompt and generated code based on question type.
 
-        For function_completion: prompt (stub) + generated (body)
-        For code_generation: generated should be complete code
+        For function_completion: Assembles stub + body by replacing pass statement
+        For code_generation: Uses generated code directly
         """
         question_type = sample.get("question_type", "qa")
         question = sample.get("question", "")
         entry_point = sample.get("entry_point", "")
+
+        # Extract code from markdown if response contains it
         generated = self.extract_code_from_response(generated, entry_point)
 
         if question_type == QuestionType.FUNCTION_COMPLETION:
@@ -231,10 +373,8 @@ class SyntheticDatasetRunner:
             if entry_point and self._has_function_definition(generated, entry_point):
                 return generated
             else:
-                # Concatenate stub with generated body
-                if not generated.startswith("\n"):
-                    generated = "\n" + generated
-                return question + generated
+                # Assemble stub + body by replacing pass statement
+                return self._assemble_function_completion(question, generated)
 
         elif question_type == QuestionType.CODE_GENERATION:
             # Full code generation - use generated code directly
@@ -392,7 +532,10 @@ class SyntheticDatasetRunner:
         return asyncio.run(self.generate_solutions_async(samples, system_prompt))
 
     def execute_code(self, code: str, test_code: str, entry_point: str | None) -> dict[str, Any]:
-        """Execute code with test and return detailed result."""
+        """Execute code with test and return detailed result.
+
+        Uses the same execution model as the generation phase for consistency.
+        """
         result = self.executor.execute(code, test_code, entry_point)
         return {
             "success": result.success,
@@ -400,6 +543,139 @@ class SyntheticDatasetRunner:
             "output": result.output,
             "timeout": result.timeout,
         }
+
+    def verify_canonical_solutions(
+        self, samples: list[dict[str, Any]], save_results: Path | None = None
+    ) -> CanonicalVerification:
+        """
+        Verify that canonical (reference) solutions pass their tests.
+
+        This validates the test/execution system by running reference answers
+        against their unit tests.
+
+        Args:
+            samples: List of samples to verify
+            save_results: Optional path to save verification results
+
+        Returns:
+            CanonicalVerification with pass/fail statistics
+        """
+        self.console.print("\n[bold cyan]Canonical Solution Verification[/bold cyan]")
+        self.console.print(f"Samples: {len(samples)}\n")
+
+        verification = CanonicalVerification(total=len(samples))
+        results = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task("Verifying canonical solutions...", total=len(samples))
+
+            for sample in samples:
+                task_id = sample.get("task_id", "unknown")
+                question_type = sample.get("question_type", "qa")
+                answer = sample.get("answer", "")
+                test_code = sample.get("test_code", "")
+                entry_point = sample.get("entry_point", "")
+
+                result = {
+                    "task_id": task_id,
+                    "question_type": question_type,
+                    "passed": True,
+                    "error": "",
+                    "skipped": False,
+                }
+
+                # Only verify code types with tests
+                if question_type not in QuestionType.CODE_TYPES or not test_code:
+                    result["skipped"] = True
+                    result["skip_reason"] = "No test code" if not test_code else "QA type"
+                    verification.passed += 1
+                else:
+                    # Combine answer with test code
+                    combined = self.combine_code(sample, answer)
+                    exec_result = self.execute_code(combined, test_code, entry_point)
+
+                    result["passed"] = exec_result["success"]
+                    result["error"] = exec_result.get("error", "")
+
+                    if exec_result["success"]:
+                        verification.passed += 1
+                    else:
+                        verification.failed += 1
+                        verification.failures.append(
+                            {
+                                "task_id": task_id,
+                                "question_type": question_type,
+                                "error": exec_result.get("error", "Unknown error"),
+                            }
+                        )
+
+                results.append(result)
+                progress.update(task, advance=1)
+
+        # Print summary
+        self._print_canonical_verification_summary(verification)
+
+        # Save results if requested
+        if save_results:
+            self._save_canonical_verification(save_results, verification, results)
+
+        return verification
+
+    def _print_canonical_verification_summary(self, verification: CanonicalVerification) -> None:
+        """Print canonical verification summary."""
+        from rich.table import Table
+
+        self.console.print("\n[bold]Canonical Verification Results:[/bold]")
+
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green", justify="right")
+
+        table.add_row("Total", str(verification.total))
+        table.add_row("Passed", str(verification.passed))
+        table.add_row("Failed", str(verification.failed))
+        table.add_row("Pass Rate", f"{verification.pass_rate:.1%}")
+
+        self.console.print(table)
+
+        if verification.failures:
+            self.console.print(
+                f"\n[yellow]⚠ {verification.failed} canonical solutions failed[/yellow]"
+            )
+            for failure in verification.failures[:5]:
+                self.console.print(f"  • {failure['task_id']}: {failure['error'][:100]}...")
+            if len(verification.failures) > 5:
+                self.console.print(f"  ... and {len(verification.failures) - 5} more")
+
+    def _save_canonical_verification(
+        self, save_path: Path, verification: CanonicalVerification, results: list[dict]
+    ) -> None:
+        """Save canonical verification results."""
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        output = {
+            "summary": {
+                "total": verification.total,
+                "passed": verification.passed,
+                "failed": verification.failed,
+                "pass_rate": verification.pass_rate,
+            },
+            "failures": verification.failures,
+            "results": results,
+        }
+
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=2, ensure_ascii=False)
+
+        self.console.print(f"\n[green]Verification results saved to: {save_path}[/green]")
 
     def evaluate_sample(
         self,
@@ -492,15 +768,49 @@ class SyntheticDatasetRunner:
             success=success,
         )
 
+    def _compute_modality_metrics(
+        self, results: list[SampleResult], is_multimodal: bool
+    ) -> ModalityMetrics:
+        """Compute metrics for a specific modality (text-only or multimodal)."""
+        filtered = [r for r in results if r.is_multimodal == is_multimodal]
+
+        if not filtered:
+            return ModalityMetrics()
+
+        success_count = sum(1 for r in filtered if r.success)
+        metrics = ModalityMetrics(
+            count=len(filtered),
+            success_rate=success_count / len(filtered),
+        )
+
+        # Compute code metrics (Pass@1)
+        code_results = [r for r in filtered if r.question_type in QuestionType.CODE_TYPES]
+        if code_results:
+            pass_values = [r.metrics.get("pass@1") for r in code_results if "pass@1" in r.metrics]
+            if pass_values:
+                metrics.pass_at_1 = sum(pass_values) / len(pass_values)
+
+        # Compute text metrics (ROUGE-L, BLEU)
+        qa_results = [r for r in filtered if r.question_type == QuestionType.QA]
+        if qa_results:
+            rouge_values = [r.metrics.get("rouge_l") for r in qa_results if "rouge_l" in r.metrics]
+            bleu_values = [r.metrics.get("bleu") for r in qa_results if "bleu" in r.metrics]
+            if rouge_values:
+                metrics.rouge_l = sum(rouge_values) / len(rouge_values)
+            if bleu_values:
+                metrics.bleu = sum(bleu_values) / len(bleu_values)
+
+        return metrics
+
     def aggregate_results(self, results: list[SampleResult]) -> AggregatedResults:
         """
-        Aggregate evaluation results.
+        Aggregate evaluation results with detailed breakdowns.
 
         Args:
             results: List of sample results
 
         Returns:
-            AggregatedResults with metrics grouped by type and category
+            AggregatedResults with metrics grouped by type, category, and modality
         """
         if not results:
             return AggregatedResults(
@@ -589,23 +899,15 @@ class SyntheticDatasetRunner:
             }
             aggregated_metrics[f"by_category.{cat}"] = cat_metrics
 
-        # Multimodal vs text-only breakdown
-        multimodal_results = [r for r in results if r.is_multimodal]
-        text_only_results = [r for r in results if not r.is_multimodal]
+        # Modality breakdown with detailed metrics
+        text_only_metrics = self._compute_modality_metrics(results, is_multimodal=False)
+        multimodal_metrics = self._compute_modality_metrics(results, is_multimodal=True)
 
-        if multimodal_results:
-            aggregated_metrics["multimodal"] = {
-                "count": len(multimodal_results),
-                "success_rate": sum(1 for r in multimodal_results if r.success)
-                / len(multimodal_results),
-            }
+        if text_only_metrics.count > 0:
+            aggregated_metrics["text_only"] = text_only_metrics.to_dict()
 
-        if text_only_results:
-            aggregated_metrics["text_only"] = {
-                "count": len(text_only_results),
-                "success_rate": sum(1 for r in text_only_results if r.success)
-                / len(text_only_results),
-            }
+        if multimodal_metrics.count > 0:
+            aggregated_metrics["multimodal"] = multimodal_metrics.to_dict()
 
         # Convert SampleResult to EvaluationResult for compatibility
         per_sample_results = [
@@ -643,6 +945,7 @@ class SyntheticDatasetRunner:
         split: str = "test",
         system_prompt: str | None = None,
         save_results: Path | None = None,
+        verify_canonical: bool = False,
         model_name: str | None = None,
         run_timestamp: datetime | None = None,
     ) -> AggregatedResults:
@@ -654,6 +957,7 @@ class SyntheticDatasetRunner:
             split: Dataset split to load if samples is None
             system_prompt: Optional system prompt
             save_results: Optional path to save detailed results
+            verify_canonical: Whether to verify canonical solutions first
             model_name: Model name for metadata
             run_timestamp: Timestamp for this run
 
@@ -689,6 +993,11 @@ class SyntheticDatasetRunner:
             self.console.print(f"System prompt: {preview}")
         self.console.print()
 
+        # Verify canonical solutions if requested
+        canonical_verification = None
+        if verify_canonical:
+            canonical_verification = self.verify_canonical_solutions(samples)
+
         # Generate solutions
         solutions_dict = self.generate_solutions(samples, system_prompt)
 
@@ -723,13 +1032,14 @@ class SyntheticDatasetRunner:
                 samples,
                 detailed_results,
                 aggregated,
+                canonical_verification,
                 system_prompt,
                 model_name,
                 run_timestamp,
             )
 
         # Print summary
-        self._print_summary(aggregated)
+        self._print_summary(aggregated, canonical_verification)
 
         return aggregated
 
@@ -739,6 +1049,7 @@ class SyntheticDatasetRunner:
         samples: list[dict[str, Any]],
         detailed_results: list[SampleResult],
         aggregated: AggregatedResults,
+        canonical_verification: CanonicalVerification | None,
         system_prompt: str | None,
         model_name: str | None,
         run_timestamp: datetime,
@@ -757,7 +1068,7 @@ class SyntheticDatasetRunner:
             k_values=self.k_values,
             timeout=self.timeout,
             system_prompt=system_prompt,
-            verify_canonical=False,
+            verify_canonical=canonical_verification is not None,
             timestamp=run_timestamp,
         )
 
@@ -772,6 +1083,7 @@ class SyntheticDatasetRunner:
 
         metadata["dataset"]["type_distribution"] = type_counts
         metadata["dataset"]["multimodal_count"] = multimodal_count
+        metadata["dataset"]["text_only_count"] = len(samples) - multimodal_count
 
         output_data = {
             "metadata": metadata,
@@ -784,6 +1096,16 @@ class SyntheticDatasetRunner:
             },
             "results": [],
         }
+
+        # Add canonical verification results if available
+        if canonical_verification is not None:
+            output_data["canonical_verification"] = {
+                "total": canonical_verification.total,
+                "passed": canonical_verification.passed,
+                "failed": canonical_verification.failed,
+                "pass_rate": canonical_verification.pass_rate,
+                "failures": canonical_verification.failures,
+            }
 
         for dr in detailed_results:
             sample_result = {
@@ -808,7 +1130,9 @@ class SyntheticDatasetRunner:
 
         self.console.print(f"\n[green]Results saved to: {save_path}[/green]")
 
-    def _print_summary(self, results: AggregatedResults) -> None:
+    def _print_summary(
+        self, results: AggregatedResults, canonical_verification: CanonicalVerification | None
+    ) -> None:
         """Print evaluation summary."""
         from rich.table import Table
 
@@ -864,20 +1188,40 @@ class SyntheticDatasetRunner:
 
             self.console.print(type_table)
 
-        # Modality breakdown
-        if "multimodal" in results.metrics or "text_only" in results.metrics:
-            self.console.print("\n[bold]By Modality:[/bold]")
+        # Modality breakdown with detailed metrics
+        if "text_only" in results.metrics or "multimodal" in results.metrics:
+            self.console.print("\n[bold]Metrics by Modality:[/bold]")
             mod_table = Table(show_header=True, header_style="bold magenta")
             mod_table.add_column("Modality", style="cyan")
             mod_table.add_column("Count", justify="right")
             mod_table.add_column("Success Rate", justify="right")
+            mod_table.add_column("Pass@1", justify="right")
+            mod_table.add_column("ROUGE-L", justify="right")
 
-            if "multimodal" in results.metrics:
-                m = results.metrics["multimodal"]
-                mod_table.add_row("Multimodal", str(m["count"]), f"{m['success_rate']:.1%}")
-
-            if "text_only" in results.metrics:
-                t = results.metrics["text_only"]
-                mod_table.add_row("Text-only", str(t["count"]), f"{t['success_rate']:.1%}")
+            for modality in ["text_only", "multimodal"]:
+                if modality in results.metrics:
+                    m = results.metrics[modality]
+                    pass_at_1 = f"{m['pass@1']:.3f}" if m.get("pass@1") is not None else "-"
+                    rouge_l = f"{m['rouge_l']:.3f}" if m.get("rouge_l") is not None else "-"
+                    mod_table.add_row(
+                        modality.replace("_", " ").title(),
+                        str(m["count"]),
+                        f"{m['success_rate']:.1%}",
+                        pass_at_1,
+                        rouge_l,
+                    )
 
             self.console.print(mod_table)
+
+        # Canonical verification summary
+        if canonical_verification is not None:
+            self.console.print("\n[bold]Canonical Verification:[/bold]")
+            if canonical_verification.failed == 0:
+                self.console.print(
+                    f"[green]✓ All {canonical_verification.passed} canonical solutions passed[/green]"
+                )
+            else:
+                self.console.print(
+                    f"[yellow]⚠ {canonical_verification.failed}/{canonical_verification.total} "
+                    f"canonical solutions failed[/yellow]"
+                )

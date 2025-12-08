@@ -137,6 +137,7 @@ def _run_synthetic(config: EvaluationConfig, run_timestamp: datetime) -> None:
         split=config.dataset.split,
         system_prompt=system_prompt,
         save_results=results_path,
+        verify_canonical=config.metrics.verify_canonical,
         model_name=config.model.model_name,
         run_timestamp=run_timestamp,
     )
@@ -194,7 +195,7 @@ def qiskit_humaneval(
     dataset_type: str = typer.Option(
         None, "--dataset-type", help="Dataset type: 'normal' or 'hard' (auto-detected if not set)"
     ),
-    verify_canonical: bool = typer.Option(
+    do_verify_canonical: bool = typer.Option(
         False, "--verify-canonical", help="Also verify canonical solutions pass tests"
     ),
 ):
@@ -256,7 +257,7 @@ def qiskit_humaneval(
             samples=samples,
             system_prompt=resolved_prompt,
             save_results=results_path,
-            verify_canonical=verify_canonical,
+            verify_canonical=do_verify_canonical,
             model_name=model_name,
             run_timestamp=run_timestamp,
         )
@@ -295,6 +296,9 @@ def synthetic(
     output: Path = typer.Option(None, "--output", "-o", help="Path to save evaluation results"),
     max_samples: int = typer.Option(
         None, "--max-samples", help="Limit number of samples to evaluate"
+    ),
+    do_verify_canonical: bool = typer.Option(
+        False, "--verify-canonical", help="Verify canonical solutions pass tests first"
     ),
 ):
     """Evaluate model on synthetic multimodal dataset."""
@@ -364,6 +368,7 @@ def synthetic(
             split=split,
             system_prompt=resolved_prompt,
             save_results=results_path,
+            verify_canonical=do_verify_canonical,
             model_name=model_name,
             run_timestamp=run_timestamp,
         )
