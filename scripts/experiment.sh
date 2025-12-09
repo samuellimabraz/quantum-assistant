@@ -5,13 +5,15 @@ set -euo pipefail
 # PEFT Experiment Runner
 # Runs experiments defined in experiments.yaml using base.yaml as foundation
 #
-# Usage: ./scripts/experiment.sh <experiment_name> [--export] [--push]
+# Usage: ./scripts/experiment.sh <experiment_name> [options]
 #
 # Examples:
 #   ./scripts/experiment.sh rslora              # Train rsLoRA
 #   ./scripts/experiment.sh pissa --export      # Train PiSSA + merge
 #   ./scripts/experiment.sh dora --push         # Train DoRA + merge + push
 #   ./scripts/experiment.sh all                 # Run all experiments
+#   ./scripts/experiment.sh rslora_r32 --export-only  # Just merge (skip train)
+#   ./scripts/experiment.sh rslora_r32 --push-only    # Just merge + push (skip train)
 #=============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +26,8 @@ EXPERIMENT_NAME=""
 EXPORT_MODEL=false
 PUSH_TO_HUB=false
 PUSH_ARTIFACTS_ONLY=false
+EXPORT_ONLY=false
+SKIP_TRAIN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -40,13 +44,30 @@ while [[ $# -gt 0 ]]; do
             PUSH_ARTIFACTS_ONLY=true
             shift
             ;;
+        --export-only)
+            # Skip training, only export (useful when training completed but export failed)
+            EXPORT_ONLY=true
+            EXPORT_MODEL=true
+            SKIP_TRAIN=true
+            shift
+            ;;
+        --push-only)
+            # Skip training, export and push (useful when training completed but export failed)
+            EXPORT_ONLY=true
+            EXPORT_MODEL=true
+            PUSH_TO_HUB=true
+            SKIP_TRAIN=true
+            shift
+            ;;
         -h|--help)
-            echo "Usage: $0 <experiment_name> [--export] [--push] [--push-artifacts]"
+            echo "Usage: $0 <experiment_name> [--export] [--push] [--push-artifacts] [--export-only] [--push-only]"
             echo ""
             echo "Options:"
             echo "  --export          Merge LoRA weights after training"
             echo "  --push            Merge + push model to HuggingFace Hub"
             echo "  --push-artifacts  Only upload training artifacts (no training)"
+            echo "  --export-only     Skip training, only merge LoRA weights (for failed exports)"
+            echo "  --push-only       Skip training, merge and push to Hub (for failed exports)"
             echo ""
             echo "Available experiments:"
             grep -E "^[a-z_]+:" "$EXPERIMENTS_FILE" | sed 's/://' | sed 's/^/  - /'
@@ -208,7 +229,7 @@ export_experiment() {
         export_cmd+=(
             --push_to_hub true
             --hub_model_id "$hub_model_id"
-            --hub_private_repo true
+            # --hub_private_repo true
         )
         echo "[experiment] Will push merged model to: https://huggingface.co/$hub_model_id"
     fi
@@ -340,11 +361,19 @@ echo "[experiment] NPROC_PER_NODE: $NPROC_PER_NODE"
 echo "[experiment] Export: $EXPORT_MODEL"
 echo "[experiment] Push to Hub: $PUSH_TO_HUB"
 echo "[experiment] Push artifacts only: $PUSH_ARTIFACTS_ONLY"
+echo "[experiment] Export only (skip train): $EXPORT_ONLY"
 echo "----------------------------------------------"
 
 # Handle push-artifacts-only mode
 if [[ "$PUSH_ARTIFACTS_ONLY" == "true" ]]; then
     push_artifacts_only "$EXPERIMENT_NAME"
+    exit 0
+fi
+
+# Handle export-only mode (skip training)
+if [[ "$EXPORT_ONLY" == "true" ]]; then
+    echo "[experiment] Skipping training, running export only..."
+    export_experiment "$EXPERIMENT_NAME"
     exit 0
 fi
 

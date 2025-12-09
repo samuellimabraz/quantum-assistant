@@ -137,7 +137,7 @@ fi
 
 # Calculate number of GPUs for distributed training
 gpu_ids_clean=$(echo "$CUDA_VISIBLE_DEVICES" | tr -d ' ')
-IFS=',' read -ra gpu_array <<< "$gpu_ids_clean"
+    IFS=',' read -ra gpu_array <<< "$gpu_ids_clean"
 NPROC_PER_NODE=${#gpu_array[@]}
 export NPROC_PER_NODE
 
