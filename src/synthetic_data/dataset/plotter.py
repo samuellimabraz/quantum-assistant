@@ -1,4 +1,7 @@
-"""Professional dataset visualization with Plotly using Qiskit brand colors."""
+"""Professional dataset visualization with Plotly for scientific publications.
+
+Uses academic color palette optimized for journals and accessibility.
+"""
 
 import base64
 from pathlib import Path
@@ -9,69 +12,35 @@ from plotly.subplots import make_subplots
 
 from synthetic_data.dataset.analyzer import DatasetStatistics
 from synthetic_data.models import Sample
-
-
-class QiskitColors:
-    """Qiskit brand color palette."""
-
-    PURPLE = "#6929C4"
-    BLUE = "#0043CE"
-    WHITE = "#FFFFFF"
-    BLACK = "#000000"
-
-    PURPLE_LIGHT = "#8A3FFC"
-    PURPLE_DARK = "#491D8B"
-    BLUE_LIGHT = "#4589FF"
-    BLUE_DARK = "#002D9C"
-
-    GRAY_10 = "#F4F4F4"
-    GRAY_20 = "#E0E0E0"
-    GRAY_50 = "#8D8D8D"
-    GRAY_70 = "#525252"
-    GRAY_90 = "#262626"
-
-    SUCCESS = "#24A148"
-    WARNING = "#F1C21B"
-    ERROR = "#DA1E28"
+from synthetic_data.utils.colors import AcademicPalette as Colors, PlotStyle as Style
 
 
 class DatasetPlotter:
-    """Generate professional visualizations for dataset analysis using Plotly."""
+    """Generate publication-quality visualizations for dataset analysis."""
 
     SPLIT_COLORS = {
-        "train": QiskitColors.PURPLE,
-        "validation": QiskitColors.BLUE,
-        "test": QiskitColors.PURPLE_LIGHT,
+        "train": Colors.PRIMARY,
+        "validation": Colors.SECONDARY,
+        "test": Colors.TERTIARY,
     }
 
     TYPE_COLORS = {
-        "function_completion": QiskitColors.PURPLE,
-        "code_generation": QiskitColors.BLUE,
-        "qa": QiskitColors.PURPLE_LIGHT,
+        "function_completion": Colors.PRIMARY,
+        "code_generation": Colors.ACCENT_1,
+        "qa": Colors.ACCENT_2,
     }
 
-    CATEGORY_COLORS = [
-        QiskitColors.PURPLE,
-        QiskitColors.BLUE,
-        QiskitColors.PURPLE_LIGHT,
-        QiskitColors.BLUE_LIGHT,
-        QiskitColors.PURPLE_DARK,
-        QiskitColors.BLUE_DARK,
-        QiskitColors.GRAY_70,
-        QiskitColors.GRAY_50,
-    ]
-
     MODALITY_COLORS = {
-        "multimodal": QiskitColors.PURPLE,
-        "text_only": QiskitColors.BLUE_LIGHT,
+        "multimodal": Colors.PRIMARY,
+        "text_only": Colors.LIGHT,
     }
 
     def __init__(
         self,
         statistics: DatasetStatistics,
         output_dir: Optional[Path] = None,
-        width: int = 1200,
-        height: int = 700,
+        width: int = 900,
+        height: int = 500,
     ):
         """Initialize plotter.
 
@@ -119,39 +88,24 @@ class DatasetPlotter:
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> dict:
-        """Create base layout with Qiskit styling."""
-        return {
-            "title": {"text": title, "font": {"size": 18, "color": QiskitColors.BLACK}},
-            "xaxis": {"title": xaxis_title, "tickfont": {"size": 11}},
-            "yaxis": {"title": yaxis_title, "tickfont": {"size": 11}},
-            "showlegend": showlegend,
-            "legend": {
-                "orientation": "h",
-                "yanchor": "bottom",
-                "y": 1.02,
-                "xanchor": "right",
-                "x": 1,
-            },
-            "plot_bgcolor": QiskitColors.WHITE,
-            "paper_bgcolor": QiskitColors.WHITE,
-            "font": {
-                "family": "IBM Plex Sans, sans-serif",
-                "size": 12,
-                "color": QiskitColors.BLACK,
-            },
-            "margin": {"l": 60, "r": 40, "t": 80, "b": 60},
-            "height": height or self.height,
-            "width": width or self.width,
-        }
+        """Create professional base layout."""
+        return Style.base_layout(
+            title=title,
+            xaxis_title=xaxis_title,
+            yaxis_title=yaxis_title,
+            showlegend=showlegend,
+            height=height or self.height,
+            width=width or self.width,
+        )
 
     def plot_split_distribution(self) -> Path:
         """Plot sample distribution across splits."""
         splits = list(self.statistics.splits.keys())
         counts = [self.statistics.splits[s].total for s in splits]
-        colors = [self.SPLIT_COLORS.get(s, QiskitColors.GRAY_50) for s in splits]
+        colors = [self.SPLIT_COLORS.get(s, Colors.LIGHT) for s in splits]
 
         total = self.statistics.total_samples
-        texts = [f"{c:,}<br>({c/total*100:.1f}%)" for c in counts]
+        texts = [f"{c:,} ({c/total*100:.1f}%)" for c in counts]
 
         fig = go.Figure(
             data=[
@@ -159,18 +113,20 @@ class DatasetPlotter:
                     x=splits,
                     y=counts,
                     marker_color=colors,
+                    marker_line_color=Colors.WHITE,
+                    marker_line_width=0.5,
                     text=texts,
                     textposition="outside",
-                    textfont={"size": 12, "color": QiskitColors.BLACK},
+                    textfont={"size": Style.ANNOTATION_SIZE, "color": Colors.TEXT_SECONDARY},
                 )
             ]
         )
 
         fig.update_layout(
             **self._base_layout(
-                f"Dataset Split Distribution (Total: {total:,})",
+                f"Dataset Split Distribution (n={total:,})",
                 xaxis_title="Split",
-                yaxis_title="Number of Samples",
+                yaxis_title="Samples",
                 showlegend=False,
             )
         )
@@ -184,10 +140,10 @@ class DatasetPlotter:
         aggregated = self.statistics.to_dict()["aggregated"]["by_type"]
         types = list(aggregated.keys())
         counts = list(aggregated.values())
-        colors = [self.TYPE_COLORS.get(t, QiskitColors.GRAY_50) for t in types]
+        colors = [self.TYPE_COLORS.get(t, Colors.LIGHT) for t in types]
 
         total = sum(counts)
-        texts = [f"{c:,}<br>({c/total*100:.1f}%)" for c in counts]
+        texts = [f"{c:,} ({c/total*100:.1f}%)" for c in counts]
 
         fig = go.Figure(
             data=[
@@ -195,9 +151,11 @@ class DatasetPlotter:
                     x=types,
                     y=counts,
                     marker_color=colors,
+                    marker_line_color=Colors.WHITE,
+                    marker_line_width=0.5,
                     text=texts,
                     textposition="outside",
-                    textfont={"size": 12},
+                    textfont={"size": Style.ANNOTATION_SIZE, "color": Colors.TEXT_SECONDARY},
                 )
             ]
         )
@@ -205,8 +163,8 @@ class DatasetPlotter:
         fig.update_layout(
             **self._base_layout(
                 "Question Type Distribution",
-                xaxis_title="Question Type",
-                yaxis_title="Number of Samples",
+                xaxis_title="Type",
+                yaxis_title="Samples",
                 showlegend=False,
             )
         )
@@ -223,9 +181,7 @@ class DatasetPlotter:
         counts = [c[1] for c in sorted_cats]
 
         total = sum(counts)
-        colors = [
-            self.CATEGORY_COLORS[i % len(self.CATEGORY_COLORS)] for i in range(len(categories))
-        ]
+        cat_colors = Colors.categorical(len(categories))
 
         fig = go.Figure(
             data=[
@@ -233,10 +189,12 @@ class DatasetPlotter:
                     y=categories,
                     x=counts,
                     orientation="h",
-                    marker_color=colors,
+                    marker_color=cat_colors,
+                    marker_line_color=Colors.WHITE,
+                    marker_line_width=0.5,
                     text=[f"{c:,} ({c/total*100:.1f}%)" for c in counts],
                     textposition="outside",
-                    textfont={"size": 11},
+                    textfont={"size": Style.ANNOTATION_SIZE, "color": Colors.TEXT_SECONDARY},
                 )
             ]
         )
@@ -244,9 +202,10 @@ class DatasetPlotter:
         fig.update_layout(
             **self._base_layout(
                 "Category Distribution",
-                xaxis_title="Number of Samples",
+                xaxis_title="Samples",
                 showlegend=False,
-                height=max(500, len(categories) * 50),
+                height=max(400, len(categories) * 45),
+                width=self.width + 100,
             )
         )
         fig.update_yaxes(autorange="reversed")
@@ -264,10 +223,12 @@ class DatasetPlotter:
         fig = make_subplots(
             rows=1,
             cols=len(types),
-            subplot_titles=[f"{t}" for t in types],
+            subplot_titles=[t.replace("_", " ").title() for t in types],
             shared_yaxes=True,
-            horizontal_spacing=0.05,
+            horizontal_spacing=0.06,
         )
+
+        cat_colors = Colors.categorical(len(categories))
 
         for col, qtype in enumerate(types, 1):
             for i, category in enumerate(categories):
@@ -287,13 +248,15 @@ class DatasetPlotter:
 
                 fig.add_trace(
                     go.Bar(
-                        name=category,
+                        name=category.replace("_", " ").title(),
                         x=splits,
                         y=counts,
-                        marker_color=self.CATEGORY_COLORS[i % len(self.CATEGORY_COLORS)],
-                        text=[f"{c}" if c > 0 else "" for c in counts],
+                        marker_color=cat_colors[i],
+                        marker_line_color=Colors.WHITE,
+                        marker_line_width=0.3,
+                        text=[f"{c}" if c > 30 else "" for c in counts],
                         textposition="inside",
-                        textfont={"size": 9, "color": QiskitColors.WHITE},
+                        textfont={"size": 8, "color": Colors.WHITE},
                         legendgroup=category,
                         showlegend=(col == 1),
                     ),
@@ -305,7 +268,8 @@ class DatasetPlotter:
             barmode="stack",
             title={
                 "text": "Question Types by Split (Stacked by Category)",
-                "font": {"size": 18, "color": QiskitColors.BLACK},
+                "font": {"size": Style.TITLE_SIZE, "color": Colors.TEXT_PRIMARY},
+                "x": 0.5,
             },
             legend={
                 "orientation": "h",
@@ -313,14 +277,14 @@ class DatasetPlotter:
                 "y": -0.25,
                 "xanchor": "center",
                 "x": 0.5,
-                "font": {"size": 10},
+                "font": {"size": 9, "color": Colors.TEXT_SECONDARY},
             },
-            plot_bgcolor=QiskitColors.WHITE,
-            paper_bgcolor=QiskitColors.WHITE,
-            font={"family": "IBM Plex Sans, sans-serif", "size": 12},
-            height=600,
-            width=self.width,
-            margin={"l": 60, "r": 40, "t": 80, "b": 150},
+            plot_bgcolor=Colors.WHITE,
+            paper_bgcolor=Colors.WHITE,
+            font={"family": Style.FONT_FAMILY, "size": Style.TICK_SIZE},
+            height=500,
+            width=self.width + 100,
+            margin={"l": 60, "r": 40, "t": 70, "b": 130},
         )
 
         output_path = self.output_dir / "type_category_by_split.png"
@@ -336,10 +300,10 @@ class DatasetPlotter:
         totals = [mm + txt for mm, txt in zip(mm_counts, text_counts)]
 
         mm_texts = [
-            f"{c:,}<br>({c/t*100:.1f}%)" if t > 0 else "" for c, t in zip(mm_counts, totals)
+            f"{c:,} ({c/t*100:.0f}%)" if t > 0 else "" for c, t in zip(mm_counts, totals)
         ]
         text_texts = [
-            f"{c:,}<br>({c/t*100:.1f}%)" if t > 0 else "" for c, t in zip(text_counts, totals)
+            f"{c:,} ({c/t*100:.0f}%)" if t > 0 else "" for c, t in zip(text_counts, totals)
         ]
 
         fig = go.Figure()
@@ -350,9 +314,11 @@ class DatasetPlotter:
                 x=splits,
                 y=mm_counts,
                 marker_color=self.MODALITY_COLORS["multimodal"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=mm_texts,
                 textposition="inside",
-                textfont={"size": 11, "color": QiskitColors.WHITE},
+                textfont={"size": Style.ANNOTATION_SIZE, "color": Colors.WHITE},
             )
         )
 
@@ -362,9 +328,11 @@ class DatasetPlotter:
                 x=splits,
                 y=text_counts,
                 marker_color=self.MODALITY_COLORS["text_only"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=text_texts,
                 textposition="inside",
-                textfont={"size": 11, "color": QiskitColors.WHITE},
+                textfont={"size": Style.ANNOTATION_SIZE, "color": Colors.TEXT_PRIMARY},
             )
         )
 
@@ -373,7 +341,7 @@ class DatasetPlotter:
             **self._base_layout(
                 "Modality Distribution by Split",
                 xaxis_title="Split",
-                yaxis_title="Number of Samples",
+                yaxis_title="Samples",
             ),
         )
 
@@ -387,7 +355,7 @@ class DatasetPlotter:
             rows=1,
             cols=3,
             subplot_titles=["By Split", "By Question Type", "By Category (Top 7)"],
-            horizontal_spacing=0.08,
+            horizontal_spacing=0.10,
         )
 
         splits = list(self.statistics.splits.keys())
@@ -404,9 +372,11 @@ class DatasetPlotter:
                 y=mm_counts,
                 name="Multimodal",
                 marker_color=self.MODALITY_COLORS["multimodal"],
-                text=[f"{c:,}<br>({p:.0f}%)" for c, p in zip(mm_counts, mm_pcts)],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
+                text=[f"{c:,} ({p:.0f}%)" for c, p in zip(mm_counts, mm_pcts)],
                 textposition="inside",
-                textfont={"size": 10, "color": QiskitColors.WHITE},
+                textfont={"size": 9, "color": Colors.WHITE},
             ),
             row=1,
             col=1,
@@ -417,6 +387,8 @@ class DatasetPlotter:
                 y=text_counts,
                 name="Text-only",
                 marker_color=self.MODALITY_COLORS["text_only"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 showlegend=True,
             ),
             row=1,
@@ -446,9 +418,11 @@ class DatasetPlotter:
                 x=types,
                 y=type_mm,
                 marker_color=self.MODALITY_COLORS["multimodal"],
-                text=[f"{c:,}<br>({p:.0f}%)" for c, p in zip(type_mm, type_pcts)],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
+                text=[f"{c:,} ({p:.0f}%)" for c, p in zip(type_mm, type_pcts)],
                 textposition="inside",
-                textfont={"size": 10, "color": QiskitColors.WHITE},
+                textfont={"size": 9, "color": Colors.WHITE},
                 showlegend=False,
             ),
             row=1,
@@ -459,6 +433,8 @@ class DatasetPlotter:
                 x=types,
                 y=type_text,
                 marker_color=self.MODALITY_COLORS["text_only"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 showlegend=False,
             ),
             row=1,
@@ -484,14 +460,19 @@ class DatasetPlotter:
         cat_totals = [mm + txt for mm, txt in zip(cat_mm, cat_text)]
         cat_pcts = [mm / t * 100 if t > 0 else 0 for mm, t in zip(cat_mm, cat_totals)]
 
+        # Shorten category names for display
+        short_cats = [c.replace("_and_", "/").replace("_", " ")[:15] for c in categories]
+
         fig.add_trace(
             go.Bar(
-                x=categories,
+                x=short_cats,
                 y=cat_mm,
                 marker_color=self.MODALITY_COLORS["multimodal"],
-                text=[f"{c:,}<br>({p:.0f}%)" for c, p in zip(cat_mm, cat_pcts)],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
+                text=[f"{p:.0f}%" for p in cat_pcts],
                 textposition="inside",
-                textfont={"size": 9, "color": QiskitColors.WHITE},
+                textfont={"size": 8, "color": Colors.WHITE},
                 showlegend=False,
             ),
             row=1,
@@ -499,9 +480,11 @@ class DatasetPlotter:
         )
         fig.add_trace(
             go.Bar(
-                x=categories,
+                x=short_cats,
                 y=cat_text,
                 marker_color=self.MODALITY_COLORS["text_only"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 showlegend=False,
             ),
             row=1,
@@ -512,24 +495,26 @@ class DatasetPlotter:
             barmode="stack",
             title={
                 "text": "Multimodal Distribution Breakdown",
-                "font": {"size": 18, "color": QiskitColors.BLACK},
+                "font": {"size": Style.TITLE_SIZE, "color": Colors.TEXT_PRIMARY},
+                "x": 0.5,
             },
             legend={
                 "orientation": "h",
                 "yanchor": "bottom",
-                "y": 1.08,
+                "y": 1.06,
                 "xanchor": "center",
                 "x": 0.5,
+                "font": {"size": Style.TICK_SIZE, "color": Colors.TEXT_SECONDARY},
             },
-            plot_bgcolor=QiskitColors.WHITE,
-            paper_bgcolor=QiskitColors.WHITE,
-            font={"family": "IBM Plex Sans, sans-serif", "size": 12},
-            height=500,
+            plot_bgcolor=Colors.WHITE,
+            paper_bgcolor=Colors.WHITE,
+            font={"family": Style.FONT_FAMILY, "size": Style.TICK_SIZE},
+            height=450,
             width=self.width + 200,
-            margin={"l": 60, "r": 40, "t": 100, "b": 80},
+            margin={"l": 60, "r": 40, "t": 80, "b": 70},
         )
 
-        fig.update_xaxes(tickangle=20, row=1, col=3)
+        fig.update_xaxes(tickangle=25, row=1, col=3)
 
         output_path = self.output_dir / "multimodal_breakdown.png"
         fig.write_image(str(output_path), scale=2)
@@ -543,13 +528,13 @@ class DatasetPlotter:
             subplot_titles=[
                 "Split Distribution",
                 "Question Types",
-                "Modality Distribution",
-                "Categories by Split (Stacked)",
-                "Test Coverage by Split",
+                "Modality by Split",
+                "Categories by Split",
+                "Test Coverage",
                 "Top Categories",
             ],
-            vertical_spacing=0.15,
-            horizontal_spacing=0.08,
+            vertical_spacing=0.18,
+            horizontal_spacing=0.10,
             specs=[
                 [{"type": "bar"}, {"type": "bar"}, {"type": "bar"}],
                 [{"type": "bar", "colspan": 2}, None, {"type": "bar"}],
@@ -558,19 +543,23 @@ class DatasetPlotter:
 
         splits = list(self.statistics.splits.keys())
         total = self.statistics.total_samples
+        cat_colors = Colors.categorical(len(self.statistics.all_categories))
 
         # Split Distribution
         counts = [self.statistics.splits[s].total for s in splits]
-        colors = [self.SPLIT_COLORS.get(s, QiskitColors.GRAY_50) for s in splits]
-        texts = [f"{c:,}<br>({c/total*100:.0f}%)" for c in counts]
+        split_colors = [self.SPLIT_COLORS.get(s, Colors.LIGHT) for s in splits]
+        texts = [f"{c:,} ({c/total*100:.0f}%)" for c in counts]
 
         fig.add_trace(
             go.Bar(
                 x=splits,
                 y=counts,
-                marker_color=colors,
+                marker_color=split_colors,
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=texts,
                 textposition="outside",
+                textfont={"size": 9, "color": Colors.TEXT_SECONDARY},
                 showlegend=False,
             ),
             row=1,
@@ -581,16 +570,19 @@ class DatasetPlotter:
         aggregated = self.statistics.to_dict()["aggregated"]["by_type"]
         types = list(aggregated.keys())
         type_counts = list(aggregated.values())
-        type_colors = [self.TYPE_COLORS.get(t, QiskitColors.GRAY_50) for t in types]
-        type_texts = [f"{c:,}<br>({c/total*100:.0f}%)" for c in type_counts]
+        type_colors = [self.TYPE_COLORS.get(t, Colors.LIGHT) for t in types]
+        type_texts = [f"{c:,} ({c/total*100:.0f}%)" for c in type_counts]
 
         fig.add_trace(
             go.Bar(
-                x=types,
+                x=[t.replace("_", " ")[:12] for t in types],
                 y=type_counts,
                 marker_color=type_colors,
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=type_texts,
                 textposition="outside",
+                textfont={"size": 9, "color": Colors.TEXT_SECONDARY},
                 showlegend=False,
             ),
             row=1,
@@ -607,9 +599,11 @@ class DatasetPlotter:
                 y=mm_counts,
                 name="Multimodal",
                 marker_color=self.MODALITY_COLORS["multimodal"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=[f"{c:,}" for c in mm_counts],
                 textposition="inside",
-                textfont={"color": QiskitColors.WHITE},
+                textfont={"color": Colors.WHITE, "size": 9},
             ),
             row=1,
             col=3,
@@ -620,9 +614,11 @@ class DatasetPlotter:
                 y=text_counts,
                 name="Text-only",
                 marker_color=self.MODALITY_COLORS["text_only"],
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=[f"{c:,}" for c in text_counts],
                 textposition="inside",
-                textfont={"color": QiskitColors.WHITE},
+                textfont={"color": Colors.TEXT_PRIMARY, "size": 9},
             ),
             row=1,
             col=3,
@@ -632,15 +628,18 @@ class DatasetPlotter:
         categories = self.statistics.all_categories
         for i, category in enumerate(categories):
             cat_counts = [self.statistics.splits[s].by_category.get(category, 0) for s in splits]
+            short_name = category.replace("_and_", "/").replace("_", " ")[:18]
             fig.add_trace(
                 go.Bar(
-                    name=category,
+                    name=short_name,
                     x=splits,
                     y=cat_counts,
-                    marker_color=self.CATEGORY_COLORS[i % len(self.CATEGORY_COLORS)],
-                    text=[f"{c}" if c > 0 else "" for c in cat_counts],
+                    marker_color=cat_colors[i],
+                    marker_line_color=Colors.WHITE,
+                    marker_line_width=0.3,
+                    text=[f"{c}" if c > 50 else "" for c in cat_counts],
                     textposition="inside",
-                    textfont={"size": 8, "color": QiskitColors.WHITE},
+                    textfont={"size": 7, "color": Colors.WHITE},
                     legendgroup=category,
                     showlegend=True,
                 ),
@@ -650,15 +649,17 @@ class DatasetPlotter:
 
         # Test Coverage
         coverages = [self.statistics.splits[s].test_coverage * 100 for s in splits]
-        cov_colors = [self.SPLIT_COLORS.get(s, QiskitColors.GRAY_50) for s in splits]
 
         fig.add_trace(
             go.Bar(
                 x=splits,
                 y=coverages,
-                marker_color=cov_colors,
+                marker_color=split_colors,
+                marker_line_color=Colors.WHITE,
+                marker_line_width=0.5,
                 text=[f"{c:.0f}%" for c in coverages],
                 textposition="outside",
+                textfont={"size": 9, "color": Colors.TEXT_SECONDARY},
                 showlegend=False,
             ),
             row=2,
@@ -668,24 +669,24 @@ class DatasetPlotter:
         fig.update_layout(
             barmode="stack",
             title={
-                "text": f"Dataset Analysis Dashboard (Total: {total:,} samples)",
-                "font": {"size": 20, "color": QiskitColors.BLACK},
+                "text": f"Dataset Analysis Dashboard (n={total:,})",
+                "font": {"size": 16, "color": Colors.TEXT_PRIMARY},
                 "x": 0.5,
             },
             legend={
                 "orientation": "h",
                 "yanchor": "bottom",
-                "y": -0.15,
+                "y": -0.12,
                 "xanchor": "center",
                 "x": 0.5,
-                "font": {"size": 9},
+                "font": {"size": 8, "color": Colors.TEXT_SECONDARY},
             },
-            plot_bgcolor=QiskitColors.WHITE,
-            paper_bgcolor=QiskitColors.WHITE,
-            font={"family": "IBM Plex Sans, sans-serif", "size": 11},
-            height=900,
-            width=1400,
-            margin={"l": 60, "r": 40, "t": 100, "b": 120},
+            plot_bgcolor=Colors.WHITE,
+            paper_bgcolor=Colors.WHITE,
+            font={"family": Style.FONT_FAMILY, "size": Style.TICK_SIZE},
+            height=750,
+            width=1200,
+            margin={"l": 60, "r": 40, "t": 70, "b": 100},
         )
 
         output_path = self.output_dir / "overview_dashboard.png"
@@ -724,6 +725,8 @@ class DatasetPlotter:
             specs=[[{"type": "table"}, {"type": "image"}] for _ in range(n_types)],
         )
 
+        type_colors = [self.TYPE_COLORS.get(t, Colors.PRIMARY) for t in types]
+
         for row, qtype in enumerate(types, 1):
             sample = samples_by_type[qtype]
 
@@ -735,8 +738,8 @@ class DatasetPlotter:
             cell_values = [
                 ["Type", "Category", "Question", "Has Test"],
                 [
-                    qtype,
-                    sample.category or "N/A",
+                    qtype.replace("_", " ").title(),
+                    (sample.category or "N/A").replace("_", " ").title(),
                     question_preview.replace("\n", "<br>"),
                     "✓" if sample.test_code else "✗",
                 ],
@@ -746,18 +749,18 @@ class DatasetPlotter:
                 go.Table(
                     header={
                         "values": header_values,
-                        "fill_color": self.TYPE_COLORS.get(qtype, QiskitColors.PURPLE),
-                        "font": {"color": QiskitColors.WHITE, "size": 11},
+                        "fill_color": type_colors[row - 1],
+                        "font": {"color": Colors.WHITE, "size": 10},
                         "align": "left",
                     },
                     cells={
                         "values": cell_values,
                         "fill_color": [
-                            [QiskitColors.GRAY_10, QiskitColors.WHITE] * len(cell_values[0])
+                            [Colors.BACKGROUND, Colors.WHITE] * len(cell_values[0])
                         ],
-                        "font": {"size": 10},
+                        "font": {"size": 9, "color": Colors.TEXT_PRIMARY},
                         "align": "left",
-                        "height": 30,
+                        "height": 28,
                     },
                 ),
                 row=row,
@@ -799,14 +802,14 @@ class DatasetPlotter:
         fig.update_layout(
             title={
                 "text": "Multimodal Sample Showcase",
-                "font": {"size": 20, "color": QiskitColors.BLACK},
+                "font": {"size": Style.TITLE_SIZE, "color": Colors.TEXT_PRIMARY},
                 "x": 0.5,
             },
-            paper_bgcolor=QiskitColors.WHITE,
-            font={"family": "IBM Plex Sans, sans-serif", "size": 12},
-            height=400 * n_types,
-            width=1400,
-            margin={"l": 40, "r": 40, "t": 100, "b": 40},
+            paper_bgcolor=Colors.WHITE,
+            font={"family": Style.FONT_FAMILY, "size": Style.TICK_SIZE},
+            height=350 * n_types,
+            width=1200,
+            margin={"l": 40, "r": 40, "t": 70, "b": 40},
             showlegend=False,
         )
 

@@ -29,7 +29,8 @@ synthetic-data generate --config yaml/config.yaml
 synthetic_data/
 ├── cli/                    # Command-line interface
 │   ├── main.py            # CLI entry point
-│   └── commands.py        # All CLI commands
+│   ├── commands.py        # All CLI commands
+│   └── generation_commands.py  # Generation stage commands
 ├── parsers/               # Document parsing
 │   ├── base.py           # Base classes (Document, ImageReference)
 │   ├── jupyter.py        # Jupyter notebook parser
@@ -38,13 +39,18 @@ synthetic_data/
 ├── extractors/            # Content extraction
 │   ├── ingestion.py      # Document ingestion
 │   ├── transcriber.py    # VLM image transcription
-│   └── chunker.py        # Semantic chunking
+│   └── chunker.py        # Semantic chunking with context prioritization
 ├── generators/            # Sample generation
-│   ├── pipeline.py       # Main generation pipeline
 │   ├── allocation.py     # Diversity-aware allocation
-│   ├── planner.py        # Input/test generation
+│   ├── prompts.py        # Prompt templates and utilities
+│   ├── types.py          # Type definitions (InputCandidate, Sample)
 │   ├── sessions.py       # Answer generation with validation
-│   └── category.py       # Post-generation classification
+│   └── stages/           # Generation stages
+│       ├── plan.py       # Question/test generation with refinement
+│       ├── filter_candidates.py  # Candidate quality filtering
+│       ├── answer.py     # Answer generation with test loop
+│       ├── curate.py     # Quality curation
+│       └── classify.py   # Category classification
 ├── dataset/              # Dataset management
 │   ├── builder.py        # Train/val/test splitting
 │   ├── exporter.py       # HuggingFace export
@@ -207,6 +213,20 @@ CURATE_MODEL_NAME
 | `code_generation` | Natural language task | Full code with imports | ✓ |
 | `qa` | Theory question | Explanation | ✗ |
 
+### Plan Stage (6a) Features
+
+The planning stage uses a unified session-based approach per task:
+
+1. **Question Generation** - Type-specific prompt with prioritized context
+2. **Question Refinement** - Ensures context grounding, avoids over-description
+3. **Test Generation** - Based on context patterns, not invented logic
+4. **Test Correction Loop** - Up to 3 correction attempts with error feedback
+
+**Context Prioritization for Multimodal:**
+- `[PRIORITY - Code That Generated Target Image]` appears first
+- Image descriptions are secondary, truncated when code context exists
+- Prevents layer-by-layer image enumeration in questions/tests
+
 ### Categories
 
 7 quantum computing categories:
@@ -320,6 +340,27 @@ generation:
 
 Higher `over_allocation_factor` reduces retry attempts but increases cost.
 Higher `diversity_weight` improves chunk/image coverage but may reduce quality.
+
+## Quality Control
+
+### Prompt Improvements for Grounded Generation
+
+The prompts are designed to ensure generated content is grounded in context:
+
+**Test Generation:**
+- Tests must be based on context patterns, not copied from examples
+- Simple structural checks preferred over complex operator comparisons
+- Explicit instruction to avoid inventing `param_map` or other patterns not in context
+
+**Question Refinement:**
+- Catches layer-by-layer image descriptions
+- Ensures multimodal questions reference images naturally
+- Validates context grounding and Qiskit 2.0 compliance
+
+**Answer Generation:**
+- Forbidden patterns: MethodType, monkey-patching, overriding `__init__`
+- Must use context code patterns directly
+- If context uses loops, answer should use loops (not enumerate each element)
 
 ## Debugging
 

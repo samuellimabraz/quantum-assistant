@@ -76,6 +76,8 @@ class Chunk:
         """
         text = self.text
         target_image_code_context = None
+        target_image_transcription = None
+        target_image_alt = None
 
         for img in self.images:
             marker = f"[IMAGE:{img.image_id}]"
@@ -83,27 +85,43 @@ class Chunk:
                 continue
 
             if target_image_id and img.image_id == target_image_id and img.transcription:
-                # Insert transcription only for target image
-                transcription_block = (
-                    f"\n[TARGET IMAGE: {img.alt_text or 'Image'}]\n"
-                    f"{img.transcription}\n"
-                    f"[END TARGET IMAGE]\n"
-                )
-                text = text.replace(marker, transcription_block)
-                # Capture the code that generated this image
+                target_image_transcription = img.transcription
+                target_image_alt = img.alt_text or "Image"
                 if hasattr(img, "code_context") and img.code_context:
                     target_image_code_context = img.code_context
+                text = text.replace(marker, "")
             else:
-                # Remove non-target image markers to avoid confusion
                 text = text.replace(marker, "")
 
-        # Clean up excessive whitespace from removed markers
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = text.strip()
 
         parts = []
 
-        # Previous context (text only, remove any code blocks)
+        if target_image_code_context:
+            parts.append(
+                f"[PRIORITY - Code That Generated Target Image]\n"
+                f"```python\n{target_image_code_context}\n```\n"
+                f"USE THIS CODE as primary reference for implementation. "
+                f"The image shows the OUTPUT of this code."
+            )
+
+        if target_image_transcription:
+            if target_image_code_context:
+                parts.append(
+                    f"[Target Image Description - for visual reference only]\n"
+                    f"{target_image_alt}: {target_image_transcription[:500]}..."
+                    if len(target_image_transcription) > 500
+                    else f"[Target Image Description - for visual reference only]\n"
+                    f"{target_image_alt}: {target_image_transcription}"
+                )
+            else:
+                parts.append(
+                    f"[TARGET IMAGE: {target_image_alt}]\n"
+                    f"{target_image_transcription}\n"
+                    f"[END TARGET IMAGE]"
+                )
+
         if self.previous_chunk_text:
             prev_text = self._extract_text_only(self.previous_chunk_text)
             if prev_text.strip():
@@ -111,21 +129,11 @@ class Chunk:
 
         parts.append(f"[Main Content]\n{text}")
 
-        # Next context (text only, remove any code blocks)
         if self.next_chunk_text:
             next_text = self._extract_text_only(self.next_chunk_text)
             if next_text.strip():
                 parts.append(f"[Next Context]\n{next_text}")
 
-        # For multimodal: prioritize code that generated the target image
-        if target_image_code_context:
-            parts.append(
-                f"[Code That Generated Target Image]\n"
-                f"```python\n{target_image_code_context}\n```\n"
-                f"IMPORTANT: This code produced the visualization in the target image."
-            )
-
-        # Accumulated code from prior cells (secondary context)
         if include_code and self.accumulated_code:
             code_str = "\n\n".join(self.accumulated_code)
             parts.append(f"[Prior Code Context]\n```python\n{code_str}\n```")

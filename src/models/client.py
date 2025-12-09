@@ -404,7 +404,7 @@ class VLMClient(LLMClient):
             ValueError: If image is too large
             RuntimeError: If image processing fails
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             return await asyncio.wait_for(
                 loop.run_in_executor(get_image_executor(), self._process_image, image_path),
