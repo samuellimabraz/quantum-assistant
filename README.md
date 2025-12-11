@@ -170,6 +170,10 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 
 🤗 [samuellimabraz/quantum-assistant](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
 
+<a href="https://huggingface.co/datasets/samuellimabraz/quantum-assistant">
+  <img src="https://huggingface.co/datasets/samuellimabraz/quantum-assistant/resolve/main/figures/overview_dashboard.png" alt="Dataset Overview" width="100%">
+</a>
+
 ### Statistics
 
 | Metric | Value |
@@ -194,6 +198,10 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 5. `transpilation_and_compilation` (8%)
 6. `primitives_and_execution` (6%)
 7. `noise_and_error_mitigation` (5%)
+
+### Explore the Dataset
+
+**Interactive Viewer:** [Browse samples on HuggingFace](https://huggingface.co/datasets/samuellimabraz/quantum-assistant/viewer/)
 
 ### Loading the Dataset
 
