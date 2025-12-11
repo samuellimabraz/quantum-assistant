@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthetic-data"
+version = "0.1.0"
+description = "Clean synthetic dataset generation pipeline"
+authors = [
+    {name = "Samuel", email = "samuellimabraz@gmail.com"}
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "httpx>=0.27.0",
+    "nbformat>=5.9.0",
+    "pillow>=10.0",
+    "datasets>=2.16.0",
+    "tqdm>=4.66.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "pymupdf>=1.23.0",
+    "python-dotenv>=1.0.0",
+    "qiskit==2.2.3",
+    "scipy>=1.15.3",
+    "pytest>=9.0.0",
+    "wand>=0.6.13",
+    "pip>=25.3",
+    "qiskit-machine-learning>=0.8.2",
+    "qiskit-ibm-runtime>=0.43.1",
+    "qiskit-aer>=0.17.2",
+    "torch>=2.8.0,<2.9.0",
+    "qiskit-addon-sqd>=0.12.0",
+    "qiskit-addon-pna>=0.2.0",
+    "qiskit-addon-slc>=0.1.0",
+    "qiskit-addon-utils>=0.3.0",
+    "samplomatic>=0.13.0",
+    "mthree>=3.0.0",
+    "rustworkx>=0.17.1",
+    "imbalanced-learn>=0.14.0",
+    "qiskit-addon-obp>=0.3.0",
+    "gem-suite>=0.1.6",
+    "qiskit-addon-mpf>=0.3.0",
+    "quimb>=1.11.2",
+    "qiskit-quimb>=0.0.9",
+    "yfinance>=0.2.66",
+    "qiskit-ibm-transpiler>=0.13.1",
+    "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
+    "plotly>=6.5.0",
+    "kaleido>=1.2.0",
+    "pylatexenc>=2.10",
+    "qiskit-addon-opt-mapper>=0.1.0",
+    "qiskit-ibm-catalog>=0.12.0",
+    "qiskit-addon-cutting>=0.10.0",
+    "seaborn>=0.13.2",
+    "ffsim>=0.0.63",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+]
+finetune = [
+    "finetune", 
+]
+
+[project.scripts]
+synthetic-data = "synthetic_data.cli.main:app"
+evaluate = "evaluate.cli:app"
+finetune = "finetune.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.uv.sources]
+finetune = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "src/finetune",
+]
+

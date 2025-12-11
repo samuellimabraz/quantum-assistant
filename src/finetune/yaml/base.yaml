@@ -1,0 +1,122 @@
+# =============================================================================
+# Base Configuration for Quantum Assistant Fine-tuning
+# All experiments inherit from this file
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Model Configuration
+# -----------------------------------------------------------------------------
+model: Qwen/Qwen3-VL-8B-Instruct
+model_author: samuellimabraz
+
+# System Prompt (consistent with evaluation)
+system: |
+  You are a quantum computing expert assistant specializing in Qiskit.
+  Provide accurate, clear, and well-structured responses about quantum computing concepts,
+  algorithms, and code implementation. Use Qiskit 2.0 best practices.
+
+# -----------------------------------------------------------------------------
+# Dataset Configuration
+# -----------------------------------------------------------------------------
+dataset:
+  - ./outputs/quantum-assistant/train.jsonl
+val_dataset:
+  - ./outputs/quantum-assistant/validation.jsonl
+load_from_cache_file: true
+data_seed: 42
+
+# -----------------------------------------------------------------------------
+# Model Precision & Attention
+# -----------------------------------------------------------------------------
+torch_dtype: bfloat16
+bf16: true
+fp16: false
+attn_impl: flash_attn
+
+# -----------------------------------------------------------------------------
+# Tokenization & Sequence Settings
+# -----------------------------------------------------------------------------
+padding_side: left
+padding_free: true
+lazy_tokenize: true
+max_new_tokens: 4096
+max_pixels: 1003520
+
+# -----------------------------------------------------------------------------
+# LoRA Configuration
+# -----------------------------------------------------------------------------
+train_type: lora
+lora_dropout: 0.15
+target_modules: all-linear 
+
+# Component-specific learning rates (optional, uncomment to use)
+# aligner_lr: 1e-4     # Lower than main LR for stable training
+# vit_lr: 1e-5         # Only if training ViT (not recommended)
+
+# -----------------------------------------------------------------------------
+# Training Configuration
+# -----------------------------------------------------------------------------
+# Optimization
+learning_rate: 2e-4
+lr_scheduler_type: cosine
+optim: adamw_torch
+weight_decay: 0.1
+
+# Batch & Accumulation
+per_device_train_batch_size: 16
+gradient_accumulation_steps: 2
+torch_empty_cache_steps: 50
+
+# Epochs & Steps
+num_train_epochs: 2
+warmup_steps: 20
+warmup_ratio: 0.1
+
+# Memory Optimization
+gradient_checkpointing: true
+
+# -----------------------------------------------------------------------------
+# Evaluation Configuration
+# -----------------------------------------------------------------------------
+per_device_eval_batch_size: 8
+eval_accumulation_steps: 4
+eval_strategy: steps
+eval_steps: 20
+metric_for_best_model: eval_loss
+load_best_model_at_end: true
+fp16_full_eval: true
+
+# -----------------------------------------------------------------------------
+# Saving Configuration
+# -----------------------------------------------------------------------------
+save_strategy: steps
+save_steps: 40
+save_total_limit: 3
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+logging_first_step: true
+logging_steps: 5
+logging_strategy: steps
+report_to:
+  - wandb
+  - tensorboard
+
+# Project naming
+project: quantum-assistant
+
+# -----------------------------------------------------------------------------
+# Data Loading
+# -----------------------------------------------------------------------------
+dataloader_num_workers: 8
+dataset_num_proc: 8
+remove_unused_columns: false
+
+# -----------------------------------------------------------------------------
+# HuggingFace Hub Configuration
+# -----------------------------------------------------------------------------
+use_hf: true
+push_to_hub: false
+hub_private_repo: true
+

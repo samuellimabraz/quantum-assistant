@@ -1,0 +1,34 @@
+# ms-swift Fine-tuning Data Preparation Configuration
+
+# Input paths
+dataset_path: outputs/final # HuggingFace dataset directory
+images_source_dir: outputs/images # Original images directory
+
+# Output paths
+output_dir: outputs/finetune # Output for prepared data
+images_output_dir: null # Auto: output_dir/images
+
+# Image processing settings
+image:
+  max_size: 640 
+  quality: 95 
+  format: JPEG 
+  preserve_aspect_ratio: true
+
+# ms-swift format settings
+swift:
+  image_placeholder: "<image>" 
+  include_system_prompt: true
+  system_prompt: |
+    You are a quantum computing expert assistant specializing in Qiskit.
+    Provide accurate, clear, and well-structured responses about quantum computing concepts,
+    algorithms, and code implementation. Use Qiskit 2.0 best practices.
+
+splits:
+  - train
+  - validation
+  - test
+
+max_samples: null # null for all samples, or int for testing
+question_types: null # null for all, or list: [function_completion, code_generation, qa]
+

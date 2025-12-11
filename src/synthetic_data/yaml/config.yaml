@@ -1,0 +1,1393 @@
+sources:
+  - path: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/data
+    type: directory
+    include_patterns:
+      - "*.ipynb"
+      - "*.mdx"
+      - "*.pdf"
+      - "*.txt"
+      - "*.json"
+    exclude_patterns:
+      - "**/node_modules/**"
+      - "**/.git/**"
+    # max_files: 10
+
+categories:
+  - name: circuits_and_gates
+    description: Quantum circuits, standard gates (H, CX, CZ, etc.), parameterized gates, circuit construction, visualization, and transpilation basics.
+
+  - name: algorithms_and_applications
+    description: Quantum algorithms (Shor, Grover, VQE, QAOA, QPE, etc.), quantum machine learning, optimization, and chemistry applications.
+
+  - name: transpilation_and_compilation
+    description: Pass managers, transpiler passes, circuit optimization, layout, routing, and pulse scheduling.
+
+  - name: primitives_and_execution
+    description: SamplerV2, EstimatorV2, runtime sessions, batch processing, job management, and result retrieval.
+
+  - name: noise_and_error_mitigation
+    description: Noise models, error mitigation techniques (ZNE, TREX, PEC), dynamical decoupling, and quantum error correction.
+
+  - name: quantum_info_and_operators
+    description: Statevectors, density matrices, operators, channels, entanglement measures, fidelity, and tomography.
+
+  - name: hardware_and_providers
+    description: Backend properties, target constraints, ISA circuits, and Qiskit Runtime service configuration.
+
+models:
+  endpoints:
+    - name: vision-model
+      base_url: ${VISION_MODEL_BASE_URL}
+      api_key: ${VISION_MODEL_API_KEY}
+      model_name: ${VISION_MODEL_NAME}
+      max_tokens: 8192
+      temperature: 0.1
+      max_retries: 5
+      retry_delay: 1.0
+      timeout: 300.0
+
+    - name: question-model
+      base_url: ${QUESTION_MODEL_BASE_URL}
+      api_key: ${QUESTION_MODEL_API_KEY}
+      model_name: ${QUESTION_MODEL_NAME}
+      max_tokens: 8192
+      temperature: 1.0
+      service_tier: "auto"
+      max_retries: 7
+      retry_delay: 2.0
+      timeout: 300.0
+
+    - name: answer-model
+      base_url: ${ANSWER_MODEL_BASE_URL}
+      api_key: ${ANSWER_MODEL_API_KEY}
+      model_name: ${ANSWER_MODEL_NAME}
+      max_tokens: 4096
+      temperature: 1.0
+      service_tier: "auto"
+      max_retries: 7
+      retry_delay: 2.0
+      timeout: 300.0
+
+    - name: curate-model
+      base_url: ${CURATE_MODEL_BASE_URL}
+      api_key: ${CURATE_MODEL_API_KEY}
+      model_name: ${CURATE_MODEL_NAME}
+      max_tokens: 4096
+      temperature: 0.1
+      service_tier: "auto"
+      max_retries: 5
+      retry_delay: 1.0
+      timeout: 300.0
+
+prompts:
+  # =============================================================================
+  # INPUT GENERATION SESSION PROMPTS
+  # =============================================================================
+
+  input_generation_system: |
+    Reasoning: high.
+    You are an expert at creating high-quality training data for quantum computing models using Qiskit.
+    You will generate questions/tasks and their unit tests based EXCLUSIVELY on the provided context.
+
+    CRITICAL: GROUND ALL CONTENT IN CONTEXT
+    - ALL tasks, questions, and code MUST be based directly on the provided context
+    - Use code patterns, examples, and concepts from the context document
+    - DO NOT invent new code or modify existing code from context
+    - If context contains working Qiskit code, use it as-is or adapt it minimally
+    - The context includes: document text, code blocks, image transcriptions, and related code
+
+    CRITICAL FOR MULTIMODAL (images from code output):
+    - If [PRIORITY - Code That Generated Target Image] is present, that code is your PRIMARY reference
+    - The image shows the OUTPUT of that code - focus on the CODE pattern, not image details
+    - If code uses loops (for i in range...), do NOT enumerate each iteration
+    - If code uses library functions (efficient_su2, z_feature_map), reference those functions
+    - DO NOT describe images layer-by-layer when a simple function call suffices
+
+    STRICT QUALITY CONTROL:
+    - REJECT trivial Python tasks (sorting, string manipulation)
+    - Base all tasks on context; don't invent anything.
+    - Questions must be self-contained with all necessary information
+    - DO NOT reference "the context" or "the provided code" in the question text itself
+
+    API MAPPING:
+    - assign_parameters() NOT bind_parameters()
+    - Statevector.from_instruction(circuit) for statevector extraction
+    - Operator(circuit) for unitary extraction
+    - .equiv() methods for quantum object comparison
+    - generate_preset_pass_manager() NOT transpile()
+    - Import from qiskit_aer, NOT qiskit.providers.aer
+    - Use StatevectorSampler, StatevectorEstimator from qiskit.primitives
+
+    DEPRECATED APIs (DO NOT USE):
+    - bind_parameters() → use assign_parameters()
+    - transpile() → use generate_preset_pass_manager().run()
+    - execute() → use primitives (Sampler/Estimator)
+    - Qubit.index → use circuit.find_bit(qubit)
+    - qiskit.primitives.Estimator → use StatevectorEstimator
+    - qiskit.primitives.Sampler → use StatevectorSampler
+
+    REQUIREMENTS:
+    - Questions must be self-contained with all necessary information
+    - DO NOT reference "the context" or "the provided code" in question text
+    - Be direct and objective
+    - Base everything on the provided context
+
+  test_generation_prompt: |
+    Create a Qiskit HumanEval style unit test for this question.
+
+    Question: {question}
+    Entry point: {entry_point}
+
+    CRITICAL - GROUND TESTS IN CONTEXT:
+    - Test logic MUST be based on patterns from the conversation context
+    - DO NOT invent test patterns, parameter mappings, or assertions not in context
+    - If context shows `efficient_su2(4, su2_gates=["rx"], ...)`, test should verify THAT specific configuration
+    - If context uses simple loops for circuit construction, test should reflect that simplicity
+    - DO NOT add complex parameter binding schemes unless context explicitly shows them
+    - Prefer simple structural checks (num_qubits, gate types) over complex operator comparisons when context is simple
+
+    CRITICAL QISKIT 2.0 TEST PATTERNS:
+    - Use assign_parameters() NOT bind_parameters()
+    - For parametrized circuits, ALWAYS bind parameters before Operator(): 
+      `bound = circuit.assign_parameters({{param: value}}); Operator(bound)`
+    - Use Statevector.equiv() and Operator.equiv() for quantum object comparisons
+    - Use numpy.allclose() for numerical comparisons
+    - For measurement results, check distribution patterns, not exact counts
+
+    CRITICAL - circuit.find_bit() API (Qiskit 2.0):
+    - circuit.find_bit(qubit) returns a BitLocations object with .index attribute
+    - To get index: circuit.find_bit(qubit).index (NOT find_bit(qubit)[1])
+    - RIGHT: q_idx = circuit.find_bit(qubit).index
+
+    CRITICAL - CircuitInstruction API (circuit.data[i]):
+    - circuit.data[i] is a CircuitInstruction object with .operation, .qubits, .clbits
+    - Access qubits: circuit.data[i].qubits (NOT .operation.qubits)
+    - Access clbits: circuit.data[i].clbits (NOT .operation.clbits)
+    - Access operation: circuit.data[i].operation (for .name, .params, etc.)
+
+    FORBIDDEN IMPORTS (DO NOT USE):
+    - from qiskit.primitives import Sampler → use StatevectorSampler
+    - from qiskit.primitives import Estimator → use StatevectorEstimator
+    - from qiskit.primitives import BaseSampler → REMOVED
+    - from qiskit.primitives import BaseEstimator → REMOVED
+    - from qiskit.opflow → REMOVED
+    - from qiskit.pulse → REMOVED
+
+    FEATURE MAP CONSTRAINTS:
+    - zz_feature_map requires at least 2 qubits (feature_dimension >= 2)
+
+    QISKIT HUMANEVAL TEST EXAMPLES (use as FORMAT reference only, NOT as test logic to copy):
+
+    EXAMPLE 1 - Basic circuit (from Qiskit HumanEval/0):
+    ```python
+    from qiskit import QuantumCircuit
+    def check(candidate):
+        result = candidate(3)
+        assert isinstance(result, QuantumCircuit)
+        assert result.num_qubits == 3
+    check(create_quantum_circuit)
+    ```
+
+    EXAMPLE 2 - Statevector comparison (from Qiskit HumanEval/2):
+    ```python
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+    def check(candidate):
+        result = candidate()
+        solution = (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+        assert result.equiv(solution)
+    check(create_bell_statevector)
+    ```
+
+    EXAMPLE 3 - Operator/circuit comparison (from Qiskit HumanEval/4):
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.quantum_info import Operator
+    def check(candidate):
+        matrix = [[0, 0, 0, 1], [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0]]
+        solution = QuantumCircuit(2)
+        solution.unitary(matrix, [0, 1])
+        assert Operator(solution).equiv(Operator(candidate()))
+    check(create_unitary_from_matrix)
+    ```
+
+    EXAMPLE 4 - Parametrized circuit:
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.circuit import Parameter
+    from qiskit.quantum_info import Operator
+    import math
+    def check(candidate):
+        circuit = candidate()
+        assert circuit.num_qubits == 1
+        assert circuit.data[0].operation.name == "rx"
+        assert circuit.data[0].operation.params[0].name == "theta"
+        bound = circuit.assign_parameters({{circuit.parameters[0]: math.pi * 3 / 4}})
+        solution_circuit = QuantumCircuit(1)
+        solution_circuit.rx(math.pi * 3 / 4, 0)
+        assert Operator(solution_circuit).equiv(Operator(bound))
+    check(rx_gate)
+    ```
+
+    EXAMPLE 5 - Measurement counts:
+    ```python
+    def check(candidate):
+        result = candidate()
+        assert isinstance(result, dict)
+        assert result.keys() == {{"00", "11"}}
+        assert 0.4 < (result["00"] / sum(result.values())) < 0.6
+    check(run_bell_state_simulator)
+    ```
+
+    EXAMPLE 6 - GHZ state with optional return:
+    ```python
+    from qiskit.quantum_info import Statevector
+    import math
+    import matplotlib
+    def check(candidate):
+        def check_circuit(circuit):
+            assert circuit.data[-1].operation.name == "measure"
+            circuit.remove_final_measurements()
+            ghz_statevector = (
+                Statevector.from_label("000") + Statevector.from_label("111")
+            ) / math.sqrt(2)
+            assert Statevector.from_instruction(circuit).equiv(ghz_statevector)
+        circuit = candidate()
+        check_circuit(circuit)
+        circuit, drawing = candidate(drawing=True)
+        check_circuit(circuit)
+        assert isinstance(drawing, matplotlib.figure.Figure)
+    check(create_ghz)
+    ```
+
+    EXAMPLE 7 - Correct find_bit usage:
+    ```python
+    from qiskit import QuantumCircuit
+    def check(candidate):
+        circuit = candidate()
+        assert isinstance(circuit, QuantumCircuit)
+        meas = circuit.data[-1]
+        assert meas.operation.name == "measure"
+        q_idx = circuit.find_bit(meas.qubits[0]).index
+        c_idx = circuit.find_bit(meas.clbits[0]).index
+        assert q_idx == 0
+        assert c_idx == 0
+    check(create_measure_circuit)
+    ```
+
+    EXAMPLE 8 - Library circuit (simple structural check):
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit.circuit.library import efficient_su2
+    def check(candidate):
+        circuit = candidate()
+        assert isinstance(circuit, QuantumCircuit)
+        assert circuit.num_qubits == 4
+        ref = efficient_su2(4, su2_gates=["rx"], entanglement="linear", reps=1)
+        assert circuit.num_parameters == ref.num_parameters
+    check(create_ansatz)
+    ```
+
+    IMPORTANT - Avoid test over-engineering:
+    - Prefer simple structural checks (num_qubits, num_parameters, gate names)
+    - Only use Operator comparison when context explicitly requires unitary equivalence
+    - DO NOT add parameter binding schemes unless the context code shows them
+    - Match test complexity to question complexity
+
+    REQUIREMENTS:
+    - Include ALL imports at top
+    - Use check(candidate) pattern exactly
+    - Call check({entry_point}) at the end (function name, not string)
+    - For parametrized circuits: ALWAYS bind parameters before Operator()
+    - Use .equiv() for quantum objects (Statevector, Operator)
+    - Use isinstance() for type checks
+    - For measurements: check distribution patterns, not exact counts
+    - NO comments in code
+    - Tests must be deterministic and reproducible
+
+    Return ONLY a single Python code block with the complete test.
+
+  test_correction_prompt: |
+    Your test code has a {error_type} error:
+
+    {error_message}
+
+    COMMON ISSUES AND FIXES:
+
+    SyntaxError:
+    - Check for missing colons, parentheses, or brackets
+    - Ensure proper indentation (4 spaces)
+    - Remove any markdown formatting
+
+    ImportError/ModuleNotFoundError:
+    - from qiskit.primitives import Sampler -> use StatevectorSampler
+    - from qiskit.primitives import Estimator -> use StatevectorEstimator
+    - from qiskit.test -> use qiskit_ibm_runtime.fake_provider
+    - from qiskit.opflow -> REMOVED, use qiskit.quantum_info
+    - from qiskit.pulse -> REMOVED in Qiskit 2.0
+    - from qiskit import execute -> REMOVED, use primitives
+
+    Deprecated API patterns:
+    - .bind_parameters() -> use .assign_parameters()
+    - .operation.qubits -> use instruction.qubits directly
+    - .operation.clbits -> use instruction.clbits directly
+    - qubit.index -> use circuit.find_bit(qubit).index
+    - .c_if() -> use QuantumCircuit.if_test()
+
+    Test structure issues:
+    - Must have check(candidate) function with assertions
+    - Must call check(entry_point) at the end
+    - For parametrized circuits: bind parameters before Operator()
+
+    Fix the error and return ONLY the corrected Python code block.
+
+  # =============================================================================
+  # ANSWER GENERATION SESSION PROMPTS
+  # =============================================================================
+
+  answer_generation_system: |
+    Reasoning: high.
+    You are a Qiskit quantum computing expert providing reference solutions.
+    Your mission is to help create high-quality Qiskit code grounded in the provided context.
+
+    CRITICAL: BASE ALL SOLUTIONS ON CONTEXT CODE
+    - The context contains document text, code examples, and image transcriptions
+    - Use code patterns and implementations DIRECTLY from the context
+    - If [Code That Generated Target Image] is present, use THAT code as your primary reference
+    - DO NOT invent new implementations, workarounds, or unusual patterns
+    - If context uses simple loops, your solution should use simple loops (not enumerated gate-by-gate)
+    - If context shows `efficient_su2(...)`, use `efficient_su2(...)` - don't manually build it
+
+    FORBIDDEN PATTERNS:
+    - DO NOT use MethodType or monkey-patching
+    - DO NOT override __init__ or built-in methods
+    - DO NOT invent custom wrappers around standard operations
+    - DO NOT add code that's not present in or derivable from context
+    - If test expects specific behavior not in context, the TEST may be wrong
+
+    SESSION FLOW:
+    1. Generate a solution based on context code patterns
+    2. If validation fails, you receive the error and correct your solution
+    3. Continue until the solution passes
+
+    CODE REQUIREMENTS:
+    - Complete, concise, executable code
+    - NO comments, NO emojis, NO conversational text
+    - Follow exact function signature if specified
+    - Use proper indentation (4 spaces per level)
+    - Include ALL necessary imports (for code_generation type)
+    - For function_completion: return ONLY the function body (indented, no imports/signature)
+
+  function_completion_answer_prompt: |
+    Complete the function body for this stub. Return ONLY the body code (the lines that replace 'pass').
+
+    Function Stub (includes imports, signature, docstring):
+    {question}
+
+    Unit Test:
+    ```python
+    {test_code}
+    ```
+
+    Context (use code patterns from here):
+    {context}
+
+    CRITICAL REQUIREMENTS:
+    - Return ONLY the function body lines that replace 'pass'
+    - Do NOT include imports (they're in the stub)
+    - Do NOT include function signature or docstring
+    - Use proper indentation (4 spaces - same as the 'pass' statement)
+    - Base your implementation on code patterns from the context.
+    - Use Qiskit 2.0 APIs: assign_parameters(), Statevector.from_instruction(), Operator(), etc.
+
+    QISKIT HUMANEVAL FORMAT EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit:
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_quantum_circuit(n_qubits):
+        """ Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        return QuantumCircuit(n_qubits)
+
+    EXAMPLE 2 - Bell statevector:
+    Stub:
+    ```python
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+    def create_bell_statevector() -> Statevector:
+        """ Return a phi+ Bell statevector.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        return (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+
+    EXAMPLE 3 - GHZ circuit:
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_ghz(drawing=False):
+        """ Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit object and the Matplotlib drawing.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        ghz = QuantumCircuit(3)
+        ghz.h(0)
+        ghz.cx(0, 1)
+        ghz.cx(0, 2)
+        ghz.measure_all()
+        if drawing:
+            return ghz, ghz.draw(output="mpl")
+        return ghz
+
+    EXAMPLE 4 - Parametrized gate:
+    Stub:
+    ```python
+    from qiskit.circuit import QuantumCircuit, Parameter
+    def create_parametrized_gate():
+        """ Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter "theta".
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        theta = Parameter("theta")
+        quantum_circuit = QuantumCircuit(1)
+        quantum_circuit.rx(theta, 0)
+        return quantum_circuit
+
+    EXAMPLE 5 - Multimodal input:
+    Stub:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_multimodal_circuit():
+        """ Generate the circuit shown in the image. The circuit uses H and CNOT gates.
+        """
+        pass
+    ```
+    Answer (ONLY the body):
+        return QuantumCircuit(n_qubits)
+        quantum_circuit.h(0)
+        quantum_circuit.cx(0, 1)
+        return quantum_circuit
+
+    EXAMPLE 6 - Multimodal input with few details:
+    Stub:
+    ```python
+      from qiskit import QuantumCircuit
+      from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+      from qiskit_ibm_runtime.fake_provider import FakeBrisbane
+
+      def create_toffoli_decomposed_circuit():
+          """Return the 3‑qubit circuit shown in the image (Toffoli decomposed into rz, sx, and cx gates)."""
+          pass
+      ```
+    Answer (ONLY the body):
+        qc = QuantumCircuit(3)
+        qc.ccx(0, 1, 2)
+        qc = transpile(qc, basis_gates=["rz", "sx", "cx"])
+        return qc
+
+    INDENTATION RULES (CRITICAL):
+    - The 'pass' statement in the stub shows the correct indentation level (typically 4 spaces)
+    - All body lines must be indented at the SAME level as 'pass' (4 spaces)
+    - Nested statements (if, for, etc.) should be indented 4 more spaces (8 spaces total)
+    - Do NOT include the function signature line
+    - Do NOT include blank lines before the first statement
+    - Do NOT add extra indentation - match the 'pass' indentation exactly
+    - If the stub shows '    pass' (4 spaces), your body lines should start with 4 spaces
+
+    EXAMPLE - Proper indentation:
+    Stub has: `    pass` (4 spaces before 'pass')
+    Your answer should be:
+        return QuantumCircuit(n_qubits)
+    (4 spaces before 'return')
+
+    Return ONLY the function body lines (properly indented to match 'pass'), no markdown code blocks, no explanations, no leading/trailing blank lines.
+
+  code_generation_answer_prompt: |
+    Generate complete code that implements the task. Base your solution on code patterns from the context.
+
+    Task:
+    {question}
+
+    Unit Test:
+    ```python
+    {test_code}
+    ```
+
+    Context (use code patterns from here):
+    {context}
+
+    CRITICAL REQUIREMENTS:
+    - Return COMPLETE code with ALL imports and the function definition
+    - Base implementation on code examples from the context
+    - Use Qiskit 2.0 APIs: assign_parameters(), generate_preset_pass_manager(), StatevectorSampler, etc.
+    - Use proper indentation (4 spaces per level)
+    - NO comments, NO explanations, NO markdown code blocks
+    - Code must pass the provided unit test
+
+    QISKIT HUMANEVAL HARD FORMAT EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit:
+    Task: "Generate a Quantum Circuit for the given int 'n_qubits' and return it. You must implement this using a function named `create_quantum_circuit` with the following arguments: n_qubits."
+    Answer:
+    from qiskit import QuantumCircuit
+
+    def create_quantum_circuit(n_qubits):
+        return QuantumCircuit(n_qubits)
+
+    EXAMPLE 2 - Bell statevector:
+    Task: "Return a phi+ Bell statevector. You must implement this using a function named `create_bell_statevector` with no arguments."
+    Answer:
+    from qiskit.quantum_info import Statevector
+    from math import sqrt
+
+    def create_bell_statevector():
+        return (Statevector.from_label("00") + Statevector.from_label("11")) / sqrt(2)
+
+    EXAMPLE 3 - GHZ circuit with measurement:
+    Task: "Define a phi plus bell state using Qiskit, transpile the circuit using pass manager with optimization level as 1, run it using Qiskit Sampler with the Aer simulator as backend and return the counts dictionary. You must implement this using a function named `run_bell_state_simulator` with no arguments."
+    Answer:
+    from qiskit import QuantumCircuit
+    from qiskit_aer import AerSimulator
+    from qiskit_ibm_runtime import Sampler
+    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+
+    def run_bell_state_simulator():
+        bell = QuantumCircuit(2)
+        bell.h(0)
+        bell.cx(0, 1)
+        bell.measure_all()
+        backend = AerSimulator()
+        pass_manager = generate_preset_pass_manager(optimization_level=1, backend=backend)
+        isa_circuit = pass_manager.run(bell)
+        sampler = Sampler(mode=backend)
+        result = sampler.run([isa_circuit], shots=1000).result()
+        return result[0].data.meas.get_counts()
+
+    EXAMPLE 4 - Parametrized circuit:
+    Task: "Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter 'theta'. You must implement this using a function named `create_parametrized_gate` with no arguments."
+    Answer:
+    from qiskit.circuit import QuantumCircuit, Parameter
+
+    def create_parametrized_gate():
+        theta = Parameter("theta")
+        quantum_circuit = QuantumCircuit(1)
+        quantum_circuit.rx(theta, 0)
+        return quantum_circuit
+
+
+    EXAMPLE 5 - Multimodal input:
+    Task: "Generate the circuit shown in the image. Measure all qubits. You must implement this using a function named `create_circuit` with no arguments."
+    Answer:
+    from qiskit import QuantumCircuit
+    def create_circuit():
+        circuit = QuantumCircuit(3)
+        circuit.h(0)
+        circuit.cx(0, 1)
+        circuit.rz(0.5, 1)
+        circuit.measure_all()
+
+    IMPORTANT:
+    - Include ALL necessary imports at the top
+    - Function signature must match the task specification exactly
+    - Use code patterns from context when available
+    - Ensure code is executable and passes the test
+
+    FOR MULTIMODAL TASKS:
+    - PRIORITIZE [PRIORITY - Code That Generated Target Image] if present
+    - This code shows EXACTLY what produces the visualization
+    - Your implementation should MATCH this code pattern
+    - If context uses `efficient_su2(...)`, use that - don't manually build gates
+    - If context uses loops, use loops - don't enumerate each element
+    - DO NOT invent workarounds like MethodType, monkey-patching, or custom wrappers
+
+    Return ONLY Python code (no markdown, no explanations).
+
+  qa_answer_prompt: |
+    Answer the question about quantum computing concepts.
+
+    Question:
+    {question}
+
+    Context:
+    {context}
+
+    REQUIREMENTS:
+    - Be clear, accurate, based on context
+    - Code examples must use Qiskit 2.0 APIs
+    - NO comments in code
+    - Be concise and direct
+
+  answer_correction_prompt: |
+    Your previous answer has a {error_type} error:
+
+    {error_message}
+
+    Analyze the error and fix your answer. Return ONLY the corrected code.
+
+    ERROR-SPECIFIC GUIDANCE:
+
+    AssertionError:
+    - Check the assertion line shown in the error for expected vs actual values
+    - Review the test's check() function to understand what's being validated
+    - Ensure return types match (list vs tuple, dict keys, etc.)
+    - For circuit comparisons, ensure equivalent structure/operations
+
+    AttributeError:
+    - Qiskit 2.0 API changes: use circuit.find_bit(qubit).index instead of qubit.index
+    - Use assign_parameters() instead of bind_parameters()
+    - CircuitInstruction API: circuit.data[i].qubits and .clbits (NOT .operation.qubits/clbits)
+    - If error "'_SingletonMeasure' object has no attribute 'clbits'": the TEST is wrong, not your code
+      * The test should use: meas.clbits[0] (NOT meas.operation.clbits[0])
+      * DO NOT add .to_mutable() or modify qc.data in your answer - your code is correct
+      * This is a test bug - generate a simple, clean answer based on context code
+    - StatevectorSampler result: use result[0].data.<register_name>.get_counts()
+
+    ImportError/ModuleNotFoundError:
+    - qiskit.test removed → use qiskit_ibm_runtime.fake_provider or qiskit_aer
+    - random_clifford: from qiskit.quantum_info import random_clifford
+    - FakeVigo removed → use FakeManilaV2 from qiskit_ibm_runtime.fake_provider
+    - execute removed → use Sampler/Estimator primitives
+
+    CircuitError:
+    - "Cannot bind parameters": ensure parameters exist in circuit before binding
+    - Check parameter names match between circuit and binding dict
+    - Use circuit.parameters to see available parameters
+
+    TypeError:
+    - Check function signatures match expected arguments
+    - Ensure correct types for Qiskit operations
+
+    IndentationError:
+    - Use consistent 4-space indentation
+    - For function_completion: body must match 'pass' indentation level
+
+    FOR FUNCTION_COMPLETION:
+    - Return ONLY the function body (no imports, no signature)
+    - Start at correct indentation level (matching where 'pass' was)
+
+    FOR CODE_GENERATION:
+    - Include ALL necessary imports
+    - Include complete function definition
+
+  # =============================================================================
+  # QUESTION TYPE PROMPTS
+  # =============================================================================
+
+  function_completion_prompt: |
+    Create a function completion task in Qiskit HumanEval format based EXCLUSIVELY on the context.
+
+    Context:
+    {context}
+
+    CRITICAL RULES:
+    1. Base the task on code patterns from the context
+    2. If [PRIORITY - Code That Generated Target Image] is present, use THAT code pattern
+    3. DO NOT invent new functionality not present in context
+    4. For multimodal: derive implementation from CONTEXT CODE, reference image naturally
+    5. If context uses library functions (efficient_su2, z_feature_map, etc.), include them
+    6. DO NOT describe the image layer-by-layer in docstring
+
+    FORMAT: A function stub with imports, signature, docstring, and `pass`.
+
+    QISKIT HUMANEVAL EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_quantum_circuit(n_qubits):
+        """ Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+        """
+        pass
+    ```
+
+    EXAMPLE 2 - Multimodal:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_circuit():
+        """ Implement the quantum circuit shown in the image.
+        """
+        pass
+    ```
+
+    EXAMPLE 3 - Multimodal with few details:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_bell_circuit():
+        """ Create the Bell state circuit shown in the diagram.
+        """
+        pass
+    ```
+
+    EXAMPLE 4 - GHZ state:
+    ```python
+    from qiskit import QuantumCircuit
+    def create_ghz(drawing=False):
+        """ Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit object and the Matplotlib drawing.
+        """
+        pass
+    ```
+
+    EXAMPLE 5 - Parametrized gate:
+    ```python
+    from qiskit.circuit import QuantumCircuit, Parameter
+    def create_parametrized_gate():
+        """ Generate a 1 qubit QuantumCircuit with a parametrized Rx gate with parameter "theta".
+        """
+        pass
+    ```
+
+    EXAMPLE 6 - With transpilation:
+    ```python
+    from qiskit import QuantumCircuit
+    from qiskit_aer import AerSimulator
+    from qiskit_ibm_runtime import Sampler
+    from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+    def run_bell_state_simulator():
+        """ Define a phi plus bell state using Qiskit, transpile the circuit using pass manager with optimization level as 1, run it using Qiskit Sampler with the Aer simulator as backend and return the counts dictionary.
+        """
+        pass
+    ```
+
+    MULTIMODAL DOCSTRING GUIDELINES:
+    - Reference image naturally: "shown in the image", "in the diagram", "as depicted"
+    - Include only KEY details (e.g., "4-qubit efficient_su2 ansatz", "36-qubit VQC")
+    - DO NOT describe every gate/layer - the user has the image
+    ✓ GOOD: "Implement the efficient_su2 ansatz circuit shown in the image."
+    ✓ GOOD: "Create the 2-qubit Bell state circuit in the diagram."
+    ✗ BAD: "Create a circuit with H on q0, P(2*x[0]) on q0, H on q0, P(2*x[1]) on q0..."
+
+    CRITICAL - TARGET IMAGE ALIGNMENT:
+    - If [PRIORITY - Code That Generated Target Image] is provided, use THAT code pattern
+    - If context uses `efficient_su2(4, su2_gates=["rx"], ...)`, mention that in docstring
+    - If context uses loops, do NOT enumerate each iteration in docstring
+    - Match docstring complexity to context code complexity
+
+    REQUIREMENTS:
+    - Include ALL necessary imports at the top
+    - Brief docstring (1-2 lines) describing the task
+    - End with `pass` statement (indented 4 spaces)
+    - Function name in snake_case
+    - Use Qiskit 2.0 APIs
+
+    Return ONLY the Python code block.
+
+  question_refinement_prompt: |
+    Review and refine your generated question/task to ensure it meets all requirements.
+
+    Original Question:
+    {question}
+
+    Question Type: {question_type}
+    Has Image: {has_image}
+
+    REFINEMENT CHECKLIST:
+
+    1. CONTEXT GROUNDING:
+       - Is the question/task answerable from the provided context?
+       - Does it use concepts, patterns, or code from the context?
+       - For code tasks: can the implementation be derived from context code?
+
+    2. FORMAT COMPLIANCE:
+       - function_completion: Must be a complete stub with imports, signature, docstring, and `pass`
+       - code_generation: Must be natural language task ending with function specification
+       - qa: Must be a conceptual question (no code implementation required)
+
+    3. MULTIMODAL ALIGNMENT (if has_image=yes):
+       - Does the question reference the image naturally ("shown in the image", "in the diagram")?
+       - CRITICAL: Does it avoid layer-by-layer image description?
+       - Is the task about what the TARGET IMAGE shows, not other context content?
+       - For code output images: focus on the CODE that generated it, not the visual result
+
+    4. AVOID OVER-DESCRIPTION (CRITICAL for multimodal):
+       - BAD: "The circuit has H on q0, then P(2.0*x[0]), then H again, then P(2.0*x[1]), then RZ..."
+       - GOOD: "Implement the variational circuit shown in the image"
+       - BAD: Describing each gate/layer individually when a simple loop would suffice
+       - GOOD: Reference the pattern or algorithm name if context provides it
+       - If [Code That Generated Target Image] uses loops, the question should NOT enumerate each element
+
+    5. SELF-CONTAINED:
+       - Can someone understand the question without seeing the context?
+       - No references to "the context", "the provided code", or "above"
+
+    6. QISKIT 2.0 COMPLIANCE:
+       - No deprecated APIs (bind_parameters, execute, transpile function)
+       - Correct import paths
+
+    If the question meets all requirements, return it unchanged.
+    If it needs refinement, return the improved version.
+
+    Return ONLY the refined question/task (no explanations, no markdown unless function_completion).
+
+  code_generation_prompt: |
+    Create a code generation task in Qiskit HumanEval Hard format based EXCLUSIVELY on the context.
+
+    Context:
+    {context}
+
+    CRITICAL RULES:
+    1. Base the task on code patterns and examples from the context
+    2. If [PRIORITY - Code That Generated Target Image] is present, base your task on THAT code
+    3. DO NOT invent new functionality not present in context
+    4. For multimodal: Use the CONTEXT CODE as reference, not the visual image description
+    5. If context code uses loops (e.g., `for i in range(size)`), do NOT enumerate each iteration in task
+    6. If context uses library functions (e.g., `efficient_su2(...)`), reference THAT function
+
+    FORMAT: Natural language task + function specification.
+    Pattern: [Task in 1-2 sentences] You must implement this using a function named `name` with [no arguments / the following arguments: ...].
+
+    TEXT-ONLY EXAMPLES:
+
+    EXAMPLE 1 - Basic circuit:
+    "Generate a Quantum Circuit for the given int 'n_qubits' and return it.
+    You must implement this using a function named `create_quantum_circuit` with the following arguments: n_qubits."
+
+    EXAMPLE 2 - Statevector:
+    "Return a phi+ Bell statevector.
+    You must implement this using a function named `create_bell_statevector` with no arguments."
+
+    EXAMPLE 3 - GHZ with optional return:
+    "Generate a QuantumCircuit for a 3 qubit GHZ State and measure it. If `drawing` is True, return both the circuit and Matplotlib drawing.
+    You must implement this using a function named `create_ghz` with the following arguments: drawing."
+
+    MULTIMODAL EXAMPLES:
+
+    EXAMPLE 4 - Circuit from image:
+    "Implement the quantum circuit shown in the image.
+    You must implement this using a function named `create_circuit` with no arguments."
+
+    EXAMPLE 5 - Circuit with key detail:
+    "Create the Bell state circuit shown in the diagram.
+    You must implement this using a function named `create_bell_circuit` with no arguments."
+
+    EXAMPLE 6 - Histogram analysis:
+    "Create a circuit that produces the measurement distribution shown in the histogram.
+    You must implement this using a function named `create_measured_circuit` with no arguments."
+
+    MULTIMODAL TASK GUIDELINES:
+    - Reference image naturally: "shown in the image", "in the diagram", "as depicted"
+    - Include only KEY details (e.g., "4-qubit", "Bell state", "VQC ansatz")
+    - DO NOT describe the image layer-by-layer or gate-by-gate
+    - Focus on WHAT the code does, not HOW the image looks
+
+    CRITICAL - TARGET IMAGE ALIGNMENT:
+    - If [PRIORITY - Code That Generated Target Image] is provided, base task on THAT code
+    - If code uses `efficient_su2(4, su2_gates=["rx"], ...)`, task should mention that pattern
+    - If code uses loops like `for i in range(36): circuit.ry(...)`, do NOT enumerate 36 gates
+    - BAD: "Create circuit with H on q0, P(2*x[0]) on q0, H on q0, P(2*x[1]) on q0..."
+    - GOOD: "Implement the variational circuit shown in the image using the pattern from context"
+
+    REQUIREMENTS:
+    - 1-2 sentences task description
+    - ALWAYS end with function specification
+    - snake_case function name
+    - Use Qiskit 2.0 terminology
+
+    Return ONLY the task description text.
+
+  qa_prompt: |
+    Create a question about quantum computing concepts/theory based on the context.
+
+    Context:
+    {context}
+
+    This is for QA (theory/concepts), NOT code generation.
+
+    CRITICAL: The question MUST be answerable from the provided context alone.
+    - If the context explains a concept, ask about that concept
+    - If the context shows code that creates a circuit, ask about what that circuit does
+    - DO NOT ask technical questions that require external knowledge
+    - DO NOT ask about things not explicitly covered in the context
+
+    FOCUS ON:
+    - Conceptual understanding explained IN THE CONTEXT
+    - Visual interpretation (what the circuit/diagram shows)
+    - Summarization of key concepts FROM THE CONTEXT
+
+    TEXT-ONLY EXAMPLES:
+    - "What quantum state does this circuit prepare?"
+    - "Explain the role of the Hadamard gate in the Bell state preparation."
+    - "How does the VQE algorithm minimize the energy expectation value?"
+
+    MULTIMODAL EXAMPLES (reference image naturally):
+    - "What does the circuit shown in the image do?"
+    - "What state does the circuit in the diagram prepare?"
+    - "Analyze the measurement results in the histogram."
+    - "What is the purpose of the gate pattern shown?"
+
+    MULTIMODAL GUIDELINES:
+    - Reference image naturally: "in the image", "shown in the diagram", "the circuit"
+    - DO NOT describe every element - the user has the image
+    - Ask about interpretation/understanding, not detailed descriptions
+    ✓ GOOD: "What state does the circuit in the image prepare?"
+    ✓ GOOD: "Explain what the H gate in the circuit does."
+    ✗ BAD: "The image shows an H gate on q0 and a CNOT. What does this H gate on q0 followed by CNOT from q0 to q1 do?"
+
+    REQUIREMENTS:
+    - Keep it direct (1-2 sentences)
+    - DO NOT ask for code implementation
+    - MUST be answerable from the context provided
+    - For multimodal: reference image naturally, don't describe it
+
+    Return ONLY the question text.
+
+  # =============================================================================
+  # QUALITY CONTROL PROMPTS
+  # =============================================================================
+
+  content_filter_system: |
+    Reasoning: high.
+    You are a content quality filter for quantum computing training data.
+    Determine if content can be used to generate educational questions about quantum computing, Qiskit, physics, mathematics, or code.
+
+    REJECT if:
+    - The content is trivial or generic Python (not quantum-specific)
+    - The content is too vague or generic
+    - It is bibliography, references, or copyright text
+
+    PASS if:
+    - It involves mathematics, quantum computing, Qiskit, or code and is not trivial, vague, or generic
+
+    CRITICAL - Response Format (MUST follow exactly):
+    Line 1: DECISION: yes
+    Line 2: REASON: Your brief explanation here in one sentence
+
+    OR
+
+    Line 1: DECISION: no
+    Line 2: REASON: Your brief explanation here in one sentence
+
+    Do NOT deviate from this format. Do NOT add extra text before or after.
+
+  content_quality_check: |
+    Can this content be used to generate a Qiskit coding task or a specific quantum theory question?
+
+    {content}
+
+    Respond in EXACTLY this format (two lines only):
+    DECISION: yes
+    REASON: Your one-sentence explanation here
+
+    OR
+
+    DECISION: no
+    REASON: Your one-sentence explanation here
+
+  image_filter_system: |
+    Reasoning: high.
+    You are an image quality filter for training data.
+    Determine if an image is educationally relevant and can be used to generate meaningful questions about quantum computing, Qiskit, physics, mathematics, or code.
+
+    REJECT if:
+    - Decorative: logos, icons, backgrounds, book covers, photos of people
+    - Too complex without context: extremely detailed diagrams where transcription is incomplete or unclear (UNLESS code context is available)
+    - Uninformative: charts/tables with insufficient data to interpret or ask about
+    - Non-educational: screenshots of UIs, error messages, or generic content
+    - Transcription quality: if the transcription shows major uncertainty or incompleteness
+
+    PASS if:
+    - Quantum circuits (even simple ones) that can be described and implemented
+    - Large/complex circuits IF accompanied by explanatory code
+    - Mathematical formulas/equations with enough context to understand
+    - Charts/histograms showing measurement results or data distributions with good context
+    - Bloch spheres or state visualizations
+    - Diagrams explaining algorithms, protocols, or concepts
+    - Code outputs that relate to quantum computing concepts
+    - Educational figures with sufficient detail for questions
+
+    BALANCE: It's important that the image have good context and can be interpreted to generate a question, code.
+
+    CRITICAL - Response Format (MUST follow exactly):
+    Line 1: DECISION: yes
+    Line 2: REASON: Your brief explanation here in one sentence
+
+    OR
+
+    Line 1: DECISION: no
+    Line 2: REASON: Your brief explanation here in one sentence
+
+    Do NOT deviate from this format. Do NOT add extra text before or after.
+
+  image_quality_check: |
+    Evaluate if this image can support a meaningful educational question.
+
+    Image transcription:
+    {transcription}
+
+    Additional context:
+    {context}
+
+    Consider:
+    1. Is the transcription complete enough to understand what the image shows?
+    2. Can a clear, answerable question be formed about this image?
+    3. Is there sufficient detail for implementation or interpretation?
+    4. Is it neither too trivial (just a symbol) nor too complex (incomprehensible)?
+
+    Respond in EXACTLY this format (two lines only):
+    DECISION: yes
+    REASON: Your one-sentence explanation here
+
+    OR
+
+    DECISION: no
+    REASON: Your one-sentence explanation here
+
+  image_transcription_system: |
+    You are an expert Quantum Computing Vision Analyst specializing in Qiskit visualizations, circuit diagrams, and mathematical physics. 
+    Your task is to provide a rigorous, objective, and structured transcription of the visual input. Be extremely detailed and precise.
+
+    ### CORE RULES
+    1.  **Objective Transcription Only:** Do not explain "how" it works. Do not generate Python code. Describe exactly what is visually present.
+    2.  **Precision:** Use exact labels found in the image (e.g., if a qubit is labeled `q_0`, do not call it `q0`).
+    3.  **Formatting:** Use Markdown. Use LaTeX `$ ... $` for all mathematical notation.
+    4.  **Code Context:** If code context is provided, use it to:
+        - Verify gate names and parameters match the code
+        - Identify the purpose of the visualization
+        - Resolve ambiguous elements by referencing the code
+        - Note if the image appears to be output from the provided code
+
+    ### TRANSCRIPTION PROTOCOLS
+
+    #### A. QUANTUM CIRCUITS
+    Scan the circuit from Left to Right. Identify discrete "layers" based on horizontal alignment.
+    * **Wires:** Identify horizontal lines. Solid lines are Quantum Registers (`q`). Double lines (or lines with a slash) are Classical Registers (`c`).
+
+    * **Gate Identification:**
+        * **1. Standard Single-Qubit Gates:** Squares or small rectangles on a single wire (X, Z, H, S, T). Read the letter inside.
+        
+        * **2. Vertical Lines with Dots (Controlled Gates):** * **Solid Dot (•):** A "Control" qubit.
+            * **Open Circle (○):** A "Negative Control" qubit.
+            * **Cross in Circle (⊕):** A "Target" for a CNOT (CX) gate.
+            * **Crucial Rule:** If a vertical line connects multiple dots (•) and one target (⊕ or Box), this is a **SINGLE Multi-Controlled Gate** (e.g., Toffoli, MCX, MCZ). Do NOT describe them as separate gates.
+
+        * **3. Multi-Wire Solid Blocks (Unitary/Custom Gates):**
+            * **Visual Definition:** Large solid colored rectangles (often purple or teal) that physically span across two or more horizontal wires vertically.
+            * **Grouping Rule:** You must treat this as a singel gate spanning multiple qubits. Do NOT split this into separate gates for each wire.
+            * **Labeling:** * The **Name** of the gate is the large central text (e.g., "KAK", "Unitary").
+                * **Input Labels:** Ignore small numbers (like "0", "1", "2") appearing near the input wires *inside* the block. These are port indices, NOT separate gates.
+                * **Parameters:** Transcribe parameter text usually found at the bottom or center (e.g., `x[19], ...`).
+            * **Transcription Format:** "Gate [Name] spanning wires [qX] to [qY] with parameters [...]".
+        
+    * **Barriers:** Describe grey dashed vertical lines as "Barriers".
+    * **Measurements:** Describe the black meter symbol. Note which quantum wire it sits on and which classical bit arrow it points to.
+    * Descrbing in layer format based on gates aligned vertically applied in the qubits, from left to right.
+        - Example 1: "**Image Type:** Quantum Circuit Diagram
+    **Registers:**
+    * **Quantum:** Six horizontal wires labeled `q0`, `q1`, `q2`, `q3`, `q4`, `q5`.
+
+    **Circuit Breakdown:**
+
+    **Layer 1 (Initialization):**
+    * **On `q0`:** Gate `ZXZ` with parameters `0, x[0], x[1]`.
+    * **On `q1`:** Gate `ZXZ` with parameters `0, x[2], x[3]`.
+    * **On `q2`:** Gate `ZXZ` with parameters `0, x[4], x[5]`.
+    * **On `q3`:** Gate `ZXZ` with parameters `0, x[6], x[7]`.
+    * **On `q4`:** Gate `ZXZ` with parameters `0, x[8], x[9]`.
+
+    **Layer 2 (First Entanglement):**
+    * **Multi-Wire Block:** A unitary gate labeled `KAK` spanning wires **`q0` and `q1`**.
+        * *Parameters:* `x[19], x[20], x[21]`.
+        * *(Input labels '0' and '1' are internal ports, not gates).*
+    * **Multi-Wire Block:** A unitary gate labeled `KAK` spanning wires **`q2` and `q3`**.
+        * *Parameters:* `x[10], x[11], x[12]`.
+        * *(Input labels '0' and '1' are internal ports, not gates).*
+
+    **Layer 3 (Rotation Layer):**
+    * **On `q0`:** Gate `ZXZ` with parameters `x[22], x[23], x[24]`.
+    * **On `q1`:** Gate `ZXZ` with parameters `x[25], x[26], x[27]`.
+    * **On `q2`:** Gate `ZXZ` with parameters `x[13], x[14], x[15]`.
+    * **On `q3`:** Gate `ZXZ` with parameters `x[16], x[17], x[18]`.
+
+    **Layer 4 (Second Entanglement):**
+    * **Multi-Wire Block:** A unitary gate labeled `KAK` spanning wires **`q1` and `q2`**.
+        * *Parameters:* `x[28], x[29], x[30]`.
+
+    **Layer 5 (Final Rotations):**
+    * **On `q1`:** Gate `ZXZ` with parameters `x[31], x[32], x[33]`.
+    * **On `q2`:** Gate `ZXZ` with parameters `x[34], x[35], x[36]`.
+
+    **Remaining Wires:**
+    * `q4` and `q5` have no further operations after Layer 1 (for `q4`) or are empty (`q5`)."
+
+    - Example 2: "Image Type: Quantum Circuit Diagram
+    Registers: Quantum `q0`, `q1`, `q2`; Classical `c` (size 3).
+    Layer 1:
+    - Gate `H` on `q0`.
+    Layer 2:
+    - `CNOT` (CX) Gate: Control `q0`, Target `q1`.
+    Layer 3:
+    - Gate `Rz` on `q1` with parameter `0.5`.
+    Layer 4:
+    - `Measurement`: Source `q0` -> Destination Classical Bit `0`."
+
+
+    #### B. BLOCH SPHERES
+    * **Geometry:** Describe the arrow's orientation using spherical coordinates concept (but purely visual).
+    * **Location:** "Pointing along the positive X-axis" or "Pointing to the equator, between X and Y."
+    * **State:** Transcribe any ket vectors (e.g., $|0\rangle$, $|+\rangle$) labeling the poles or the vector itself.
+
+    #### C. CHARTS & HISTOGRAMS
+    * **Axes:** Transcribe the Label and Unit for X and Y axes.
+    * **Data:** For bar charts (histograms), list the "State Label" (x-tick) and the exact "Probability/Count" (height) written on top of the bar.
+        * *Example:* "State '00' has height 0.502; State '11' has height 0.498."
+
+    #### D. MATH & EQUATIONS
+    * Transcribe all text into LaTeX strings.
+    * Preserve matrix structures (rows/columns) exactly using `\begin{bmatrix} ... \end{bmatrix}`.
+
+    #### E. LARGE/COMPLEX CIRCUITS (Edge Case)
+    If the circuit appears dense (many qubits/gates) OR has many layers:
+    1.  **Do NOT list every single gate.** This causes hallucinations and is too verbose.
+    2.  **Trust the Code Context:** If code is provided, use it to identify the high-level structure (e.g., "This is a 20-qubit QAOA Ansatz", "Trotterization circuit").
+    3.  **Summarize:** Describe the *algorithm*, *pattern*, or *structure* rather than individual components.
+    4.  **Explicit Association:** State "This visualization shows the circuit generated by the provided code, implementing [Function/Algorithm]."
+
+    ### OUTPUT STRUCTURE
+    Start your response with the type of image (e.g., "Image Type: Quantum Circuit Diagram").
+    Then, provide the breakdown. 
+    Finish with a concise explanation of the image.
+
+  image_transcription: |
+    Provide a detailed, objective transcription of this image. 
+
+    {context}
+
+    IMPORTANT:
+    - If code context is provided, use it to accurately identify what the visualization shows
+    - For **LARGE/COMPLEX circuits**: Do NOT list every gate. Use the provided CODE to summarize the circuit's purpose and structure (e.g. "QAOA Ansatz", "QFT", "Grover Oracle").
+    - For **SMALL/MEDIUM circuits**: Match gates and structure to the code that generated it.
+    - For plots/charts: reference the data or operations from the code
+    - Be precise with labels, parameters, and values visible in the image
+    - The transcription should allow someone to understand the image without seeing it
+
+    If the image is not related to quantum computing, physics, mathematics, or code, describe briefly what it shows.
+
+  # =============================================================================
+  # CANDIDATE FILTERING
+  # =============================================================================
+
+  candidate_filter_system: |
+    Reasoning: high.
+    You are a quality filter for generated input candidates.
+    Evaluate if the candidate is suitable for training data generation.
+
+    REJECT if:
+    - The input is trivial, generic or not quantum, mathematical, or physics related
+    - The question doesn't match the question type format
+    - The input have image and the question doesn't reference elements of the image
+    - The question is too vague or cannot be verified
+    - The input mentions something that is not understood just by the question 
+    - The question describes many details of the image, citing for example all the details, gates, etc.
+    - The question is not answerable from the context provided
+
+    Respond in this format:
+    DECISION: PASS/REJECT
+    REASON: Brief explanation (one sentence)
+
+  candidate_filter_prompt: |
+    Evaluate this input candidate:
+
+    Question Type: {question_type}
+    Has Image: {has_image}
+    Has Test: {has_test}
+
+    Question:
+    {question}
+
+    Context Preview:
+    {context_preview}
+
+    DECISION: PASS/REJECT
+    REASON: Brief explanation
+
+  # =============================================================================
+  # CLASSIFICATION AND CURATION
+  # =============================================================================
+
+  category_classification_system: |
+    Reasoning: high.
+    You are a content classifier. Classify the sample into ONE of the following categories based on its question and answer content:
+
+    {categories}
+
+    Return ONLY the category name (e.g., "circuits_and_gates").
+
+  category_classification: |
+    Question Type: {question_type}
+
+    Question:
+    {question}
+
+    Answer:
+    {answer}
+
+    Return ONLY the category name.
+
+  sample_curation_system: |
+    Reasoning: high.
+    You are a quality control expert for quantum computing VLM training data.
+    Evaluate if samples meet high standards for fine-tuning vision-language models.
+
+    CONTENT CORRECTNESS:
+    - Question must be answerable from the context provided
+    - Answer should be grounded in the context, not invented
+    - Answer must address the question correctly
+    - No factual errors in physics, math, or quantum computing
+
+    MULTIMODAL COHERENCE (if has_image=yes):
+    - Question should reference the image naturally
+    - Question should be about interpreting/implementing what the image shows
+
+    CONTEXT RELEVANCE:
+    - Answer should use concepts/patterns from the context
+    - For code samples: implementation should follow context code patterns
+    - For QA: answer should be derivable from context information
+
+    FORMATTING:
+    - No excessive repetition
+    - No URLs or links
+    - No pleasantries ("Happy coding!", etc.)
+
+    QUALITY CHECK:
+    - REJECT trivial Python tasks without Qiskit/quantum/math logic
+    - REJECT if question is disconnected from context
+    - REJECT if multimodal question over-describes the image instead of referencing it
+    - REJECT if question focuses on visual minutiae of a large circuit rather than the algorithmic purpose defined in the code
+
+    NOTE: Code correctness is already verified by tests - focus on content quality and relevance.
+
+    CRITICAL - Response Format (MUST follow exactly):
+    Line 1: DECISION: PASS
+    Line 2: REASON: Brief explanation in one sentence (optional for PASS)
+
+    OR
+
+    Line 1: DECISION: REJECT
+    Line 2: REASON: Brief explanation in one sentence (required for REJECT)
+
+    Do NOT deviate from this format. Do NOT add extra text before or after.
+
+  sample_curation: |
+    Type: {question_type}
+    Multimodal: {has_image}
+    Has Test: {has_test}
+
+    Question:
+    {question}
+
+    Answer:
+    {answer}
+
+    Context Preview:
+    {context_preview}
+
+    Image Description (if multimodal):
+    {image_description}
+
+    DECISION: PASS/REJECT
+    REASON: Brief explanation
+
+generation:
+  target_samples: 8000
+
+  question_model: question-model
+  vision_model: vision-model
+  answer_model: answer-model
+  curate_model: curate-model
+  filter_model: curate-model
+
+  llm_batch_size: 32
+  llm_concurrency: 10
+  vlm_batch_size: 32
+  vlm_concurrency: 16
+
+  # ============================================================================
+  # DIVERSITY-AWARE ALLOCATION SETTINGS
+  # Based on analysis of 7,877 filtered chunks with 3,520 unique images
+  # ============================================================================
+
+  # Over-allocation to reduce retry attempts (1.8x = generate 80% more candidates)
+  # With 8000 target: generates 14,400 candidates → expect 1-2 attempts
+  over_allocation_factor: 1.7
+
+  # Diversity weight for chunk/image selection (0=score only, 1=diversity only)
+  # 0.4 provides optimal balance: 81.9% chunk coverage, 98.6% image coverage
+  diversity_weight: 0.5
+
+  # Input planning
+  enable_candidate_filtering: true
+
+  # Per-type allocation configuration
+  # Expected distribution: 2,400 QA + 2,800 code_gen + 2,800 func_comp = 8,000
+  type_allocations:
+    qa:
+      ratio: 0.30 # 30% = 2,400 samples
+      multimodal_ratio: 0.70 # 70% multimodal (1,680), 30% text (720)
+    code_generation:
+      ratio: 0.35 # 35% = 2,800 samples
+      multimodal_ratio: 0.30 # 30% multimodal (840), 70% text (1,960)
+    function_completion:
+      ratio: 0.35 # 35% = 2,800 samples
+      multimodal_ratio: 0.30 # 30% multimodal (840), 70% text (1,960)
+
+  # Legacy fields (kept for compatibility, not used by new allocation)
+  question_types:
+    - function_completion
+    - code_generation
+    - qa
+
+  question_type_weights:
+    function_completion: 0.35
+    code_generation: 0.35
+    qa: 0.30
+
+  multimodal_ratio: 0.5
+
+  max_context_length: 2912
+  min_chunk_length: 800
+  chunk_overlap: 0
+  max_code_blocks_per_chunk: 3
+  max_images_per_chunk: 3
+
+  enable_image_transcription: true
+  enable_content_filtering: true
+  enable_curate_filtering: true
+  enable_deduplication: false
+  similarity_threshold: 0.85
+
+  enable_code_verification: true
+  code_verification_max_iterations: 7
+  code_verification_timeout: 80
+  code_verification_concurrency: 10
+  skip_ibm_service_validation: false
+
+  test_validation_timeout: 30
+  answer_checkpoint_interval: 30
+
+dataset:
+  name: quantum-multimodal
+  description: |
+    High-quality multimodal dataset for quantum computing with Qiskit.
+    Three input types: function_completion, code_generation, qa.
+    Code samples include unit tests for verification.
+    Balanced distribution across 7 categories.
+
+  parsed_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/parsed
+  generated_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/generated
+  final_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/final
+  images_dir: /Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/images
+
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+
+  license: apache-2.0
+
+seed: 42

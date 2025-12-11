@@ -1,0 +1,124 @@
+# =============================================================================
+# PEFT Experiments Configuration
+# Each experiment overrides base.yaml with specific parameters
+# 
+# Usage: ./scripts/experiment.sh <experiment_name>
+#   Example: ./scripts/experiment.sh pissa
+# =============================================================================
+
+lora:
+  model_name: Qwen3-VL-8B-lora
+  output_dir: ./outputs/train/exp-lora
+  run_name: Qwen3-VL-8B-lora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-lora
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: false
+  use_dora: false
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+# Baseline: rsLoRA with standard initialization
+rslora:
+  model_name: Qwen3-VL-8B-rslora
+  output_dir: ./outputs/train/exp-rslora
+  run_name: Qwen3-VL-8B-rslora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+# PiSSA: SVD-based initialization (faster convergence)
+pissa:
+  model_name: Qwen3-VL-8B-pissa
+  output_dir: ./outputs/train/exp-pissa
+  run_name: Qwen3-VL-8B-pissa
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-pissa
+  # LoRA settings
+  init_weights: "pissa"
+  use_rslora: true
+  use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+# OLoRA: QR orthonormal initialization (stable training)
+olora:
+  model_name: Qwen3-VL-8B-olora
+  output_dir: ./outputs/train/exp-olora
+  run_name: Qwen3-VL-8B-olora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-olora
+  # LoRA settings
+  init_weights: "olora"
+  use_rslora: true
+  use_dora: false
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+# DoRA: magnitude-direction decomposition (best quality)
+dora:
+  model_name: Qwen3-VL-8B-dora
+  output_dir: ./outputs/train/exp-dora
+  run_name: Qwen3-VL-8B-dora
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-dora
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: true
+  use_dora: true
+  # Freeze settings
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+rslora_frozen_aligner:
+  model_name: Qwen3-VL-8B-rslora-frozen
+  output_dir: ./outputs/train/exp-rslora-frozen
+  run_name: Qwen3-VL-8B-rslora-frozen
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora-frozen
+  # LoRA settings
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+  # Freeze settings (aligner frozen for comparison)
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: true
+
+rslora_r32:
+  model_name: InternVL3_5-8B-MPO-rslora-r32-2
+  output_dir: ./outputs/train/exp-rslora-r32-2
+  run_name: InternVL3_5-8B-MPO-rslora-r32-2
+  hub_model_id: samuellimabraz/InternVL3_5-8B-MPO-rslora-r32-2
+  lora_rank: 32
+  lora_alpha: 64  
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+
+
+rslora_r64:
+  model_name: Qwen3-VL-8B-rslora-r64
+  output_dir: ./outputs/train/exp-rslora-r64
+  run_name: Qwen3-VL-8B-rslora-r64
+  hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora-r64
+  lora_rank: 64
+  lora_alpha: 128  
+  init_weights: "true"
+  use_rslora: true
+  use_dora: false
+  freeze_llm: false
+  freeze_vit: true
+  freeze_aligner: false
+

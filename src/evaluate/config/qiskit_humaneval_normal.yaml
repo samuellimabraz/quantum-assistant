@@ -1,0 +1,48 @@
+# Evaluation Configuration for Qiskit HumanEval (Normal - Code Completion)
+#
+# Dataset type: normal (completion)
+# Prompt contains imports + function signature, model completes the body
+# Metrics: Pass@k using unbiased estimator from HumanEval paper
+
+# Model Configuration
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 4096
+  temperature: 0.0 # Greedy decoding for deterministic evaluation
+  timeout: 300.0
+  is_vlm: false
+
+# Dataset Configuration
+dataset:
+  type: "qiskit_humaneval"
+  path: "/Users/samuel/Developer/avante/unifei/tcc/qiskit-human-eval/dataset/dataset_qiskit_test_human_eval.json"
+  dataset_variant: "normal"
+  images_dir: null
+  max_samples: null
+
+# Metrics Configuration
+metrics:
+  # Number of solutions to generate per task (for Pass@k)
+  num_samples_per_task: 1
+  # K values for Pass@k computation
+  k_values: [1]
+  # Code execution timeout in seconds
+  execution_timeout: 60
+  # Maximum concurrent API requests
+  max_concurrent: 20
+
+  # System prompt configuration
+  # Options: "qiskit_humaneval", "qiskit_humaneval_minimal", "generic", "custom", or null
+  system_prompt_type: "qiskit_humaneval"
+  custom_system_prompt: null
+
+  # Verify canonical solutions first (for debugging)
+  verify_canonical: false
+
+# Output Configuration
+output:
+  results_file: null
+  results_dir: "outputs/evaluate/qiskit-humaneval"
+  auto_filename: true
