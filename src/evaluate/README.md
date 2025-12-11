@@ -1,51 +1,117 @@
-"""
-Evaluation Module for Quantum Computing Models
-===============================================
+# Evaluation Module
 
-A evaluation framework for assessing quantum computing code generation
-and multimodal understanding models.
+Evaluate quantum computing code generation models on Qiskit HumanEval benchmarks and synthetic multimodal datasets.
 
-## Architecture
+## Overview
 
-The evaluation module follows clean OOP principles with the following structure:
+This module provides a framework for evaluating LLMs and VLMs on quantum computing tasks:
+
+- **Qiskit HumanEval**: IBM's benchmark with 151 function completion problems
+- **Qiskit HumanEval Hard**: 151 full code generation problems from natural language
+- **Synthetic Dataset**: Multimodal evaluation with circuits, charts, and Q&A
+
+Supports Pass@k metrics for code and ROUGE-L/BLEU for conceptual questions.
+
+## Installation
+
+```bash
+# From project root
+pip install -e ".[evaluate]"
+
+# Or with uv
+uv sync
+```
+
+## Quick Start
+
+### Qiskit HumanEval Evaluation
+
+```bash
+evaluate qiskit-humaneval \
+    --dataset path/to/qiskit_humaneval.json \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen2.5-coder-14b \
+    --num-samples 10 \
+    --k-values "1,5,10"
+```
+
+### Qiskit HumanEval Hard
+
+```bash
+evaluate qiskit-humaneval \
+    --dataset path/to/qiskit_humaneval_hard.json \
+    --dataset-type hard \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen3-vl-quantum \
+    --vlm \
+    --num-samples 10
+```
+
+### Synthetic Multimodal Dataset
+
+```bash
+evaluate synthetic \
+    --dataset outputs/final \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen3-vl-quantum \
+    --vlm \
+    --split test
+```
+
+## Supported Benchmarks
+
+### 1. Qiskit HumanEval
+
+**Format**: Function completion (stub with signature + docstring)
+
+**Example:**
+
+```python
+# Prompt
+from qiskit import QuantumCircuit
+
+def create_ghz_state(n_qubits: int) -> QuantumCircuit:
+    """Create a GHZ state on n qubits."""
+    pass
+
+# Model completes the function body
+# Tests verify correctness
+```
+
+**Metrics**: Pass@k (k=1,5,10)
+
+### 2. Qiskit HumanEval Hard
+
+**Format**: Full code generation from natural language
+
+**Example:**
 
 ```
-evaluate/
-├── evaluators/       # Evaluation logic for different task types
-├── metrics/          # Metric implementations (Pass@k, BLEU, ROUGE, etc.)
-├── runners/          # High-level runners for specific benchmarks
-├── execution/        # Safe code execution sandbox
-└── cli.py           # Command-line interface
+Create a 3-qubit GHZ state and return the circuit.
+You must implement this using a function named `create_ghz` with no arguments.
 ```
 
-## Key Components
+**Metrics**: Pass@k (k=1,5,10)
 
-### Evaluators
+### 3. Synthetic Dataset
 
-- **CodeEvaluator**: Evaluates code generation with Pass@k metrics
-- **MultimodalEvaluator**: Evaluates multimodal samples with various question types
+**Formats**: Function completion, code generation, and question answering
 
-### Metrics
+**Question Types:**
 
-**Code Metrics:**
-- Pass@k: Unbiased estimator following HumanEval methodology
-- Execution Accuracy: Percentage of code that executes successfully
+| Type | Evaluation | Metric |
+|------|------------|--------|
+| `function_completion` | Unit test execution | Pass@k |
+| `code_generation` | Unit test execution | Pass@k |
+| `qa` | Text similarity | ROUGE-L, BLEU |
 
-**Text Metrics:**
-- Exact Match: String equality
-- BLEU: N-gram overlap score
-- ROUGE-L: Longest common subsequence F1
+**Multimodal Support**: Handles samples with circuit diagrams, charts, Bloch spheres
 
-### Runners
+## Configuration
 
-- **QiskitHumanEvalRunner**: Evaluates models on the Qiskit HumanEval benchmark
-- **SyntheticDatasetRunner**: Evaluates on synthetic multimodal dataset
+### Using YAML (Recommended)
 
-## Usage
-
-### YAML Configuration (Recommended)
-
-Create a YAML configuration file (see `config/eval_config.yaml` for examples):
+Create `eval_config.yaml`:
 
 ```yaml
 model:
@@ -56,178 +122,102 @@ model:
 
 dataset:
   type: "qiskit_humaneval"
-  path: "qiskit-human-eval/dataset/dataset_qiskit_test_human_eval.json"
-  dataset_type: "normal"  # "normal" for completion, "hard" for full generation
-  max_samples: null
+  path: "path/to/dataset.json"
+  dataset_variant: "normal"  # or "hard"
 
 metrics:
   num_samples_per_task: 10
   k_values: [1, 5, 10]
-  execution_timeout: 30
-  system_prompt_type: "qiskit_humaneval"  # Use IBM Qiskit prompt for fair comparison
-  custom_system_prompt: null
-  verify_canonical: false  # Verify canonical solutions first
+  system_prompt_type: "qiskit_humaneval"  # See system prompts below
 
 output:
-  results_file: "results/qiskit_eval.json"
+  results_dir: "outputs/evaluate"
+  auto_filename: true
 ```
 
-**System Prompt Configuration:**
-
-For fair comparison with IBM's Qiskit HumanEval results, use the full Qiskit system prompt:
-
-```yaml
-metrics:
-  system_prompt_type: "qiskit_humaneval"  # Full prompt (recommended)
-  # Other options: "qiskit_humaneval_minimal", "generic", "custom", or null
-```
-
-See [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md) for detailed information on available prompts.
-
-Then run:
+Run with:
 
 ```bash
-# Set environment variables in .env file or export them
-export MODEL_BASE_URL=http://localhost:8000/v1
-export API_KEY=your-key-here
-
-# Run evaluation
-python -m evaluate.cli run --config config/eval_config.yaml
+evaluate run --config eval_config.yaml
 ```
 
-### System Prompts for Fair Comparison
+### Environment Variables
 
-The evaluation framework supports configurable system prompts to ensure fair comparison across models. IBM's Qwen2.5-Coder-14B-Qiskit model uses a detailed system prompt with Qiskit 2.0 best practices.
-
-**Available Prompts:**
-
-1. **`qiskit_humaneval`** (recommended): Full Qiskit assistant prompt matching IBM's approach
-   - Comprehensive Qiskit 2.0 guidelines
-   - Deprecated method warnings
-   - Error mitigation/suppression techniques
-   - Best practices for PassManagers and Primitives
-
-2. **`qiskit_humaneval_minimal`**: Minimal prompt for base models
-
-3. **`generic`**: Generic code assistant (no Qiskit-specific)
-
-4. **`custom`**: Your own custom prompt
-
-5. **`null`**: No system prompt (zero-shot)
-
-**Configuration:**
-
-```yaml
-metrics:
-  system_prompt_type: "qiskit_humaneval"  # For fair comparison with IBM results
-  custom_system_prompt: null
-```
-
-**CLI Usage:**
+Set in `.env`:
 
 ```bash
-# Full Qiskit prompt
-python -m evaluate.cli qiskit-humaneval \
-    --dataset dataset.json \
-    --model-url http://localhost:8000/v1 \
-    --system-prompt qiskit
-
-# Minimal prompt
-python -m evaluate.cli qiskit-humaneval \
-    --dataset dataset.json \
-    --model-url http://localhost:8000/v1 \
-    --system-prompt minimal
-
-# Custom prompt
-python -m evaluate.cli qiskit-humaneval \
-    --dataset dataset.json \
-    --model-url http://localhost:8000/v1 \
-    --system-prompt "Your custom prompt..."
+MODEL_BASE_URL=http://localhost:8000/v1
+API_KEY=your-key
+MODEL_NAME=qwen2.5-coder-14b
 ```
 
-For detailed information, see [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md).
+## System Prompts
 
-### Command Line (Legacy)
+Different prompts for fair comparison:
 
-**Qiskit HumanEval Evaluation:**
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `qiskit_humaneval` | Full IBM prompt with best practices | Fair comparison with IBM results |
+| `qiskit_humaneval_minimal` | Concise Qiskit prompt | Baseline testing |
+| `generic` | Generic code assistant | Non-specialized models |
+| `null` | No system prompt | Zero-shot evaluation |
 
-```bash
-python -m evaluate.cli qiskit-humaneval \\
-    --dataset /path/to/qiskit_humaneval.json \\
-    --model-url http://localhost:8000/v1 \\
-    --model-name qwen \\
-    --num-samples 10 \\
-    --k-values 1,5,10 \\
-    --output results/qiskit_eval.json
-```
-
-**Synthetic Dataset Evaluation:**
-
-```bash
-python -m evaluate.cli synthetic \\
-    --test-split outputs/splits/test.pkl \\
-    --model-url http://localhost:8000/v1 \\
-    --model-name qwen \\
-    --images-dir outputs/images \\
-    --vlm \\
-    --output results/synthetic_eval.json
-```
-
-**Compare Results:**
-
-```bash
-python -m evaluate.cli compare --results-dir results/
-```
-
-**Verify Canonical Solutions:**
-
-Before running evaluations, verify that the evaluation setup works correctly:
-
-```bash
-# Verify normal dataset (code completion)
-python -m evaluate.cli verify-canonical \\
-    --dataset /path/to/qiskit_humaneval.json \\
-    --dataset-type normal
-
-# Verify hard dataset (full code generation)
-python -m evaluate.cli verify-canonical \\
-    --dataset /path/to/qiskit_humaneval_hard.json \\
-    --dataset-type hard
-```
-
-### Python API
-
-**Using YAML Configuration:**
+**Example prompts:**
 
 ```python
-from evaluate.config.schema import EvaluationConfig
+# qiskit_humaneval (full IBM prompt)
+"""You are an expert in quantum computing and Qiskit framework.
+Generate precise, well-documented Qiskit code following these guidelines:
+1. Use Qiskit 2.0 APIs exclusively
+2. Prefer primitives (SamplerV2, EstimatorV2) over legacy execute()
+3. Include proper imports
+..."""
 
-# Load configuration
-config = EvaluationConfig.from_yaml("config/eval_config.yaml")
-
-# Modify if needed
-config.dataset.max_samples = 50
-
-# Run evaluation directly from config
-from evaluate.cli import _run_evaluation_from_config
-results = _run_evaluation_from_config(config)
+# qiskit_humaneval_minimal
+"""You are a quantum computing expert specializing in Qiskit.
+Provide accurate code using Qiskit 2.0 best practices."""
 ```
 
-**Qiskit HumanEval:**
+See [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md) for full prompts.
+
+## Metrics
+
+### Code Metrics
+
+**Pass@k**: Probability that at least one of k solutions passes all tests.
+
+$$
+\text{Pass@k} = \underset{\text{problems}}{\mathbb{E}} \left[1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}\right]
+$$
+
+where:
+- $n$ = total solutions generated per problem
+- $c$ = number of correct solutions
+
+**Execution Accuracy**: Percentage of code that executes without errors (ignoring test results).
+
+### Text Metrics (for QA)
+
+**ROUGE-L**: Longest common subsequence F1 score between generated and reference answers.
+
+**BLEU**: N-gram overlap score (1 to 4-grams).
+
+**Exact Match**: String equality (case-sensitive).
+
+## Python API
+
+### Qiskit HumanEval
 
 ```python
 from evaluate.runners import QiskitHumanEvalRunner
 from evaluate.config.system_prompts import get_system_prompt
-from models.client import LLMClient
+from models import LLMClient
 
-# Create client
+# Setup client
 client = LLMClient(
     base_url="http://localhost:8000/v1",
-    model_name="qwen"
+    model_name="qwen2.5-coder-14b"
 )
-
-# Get system prompt for fair comparison with IBM results
-system_prompt = get_system_prompt("qiskit_humaneval")
 
 # Create runner
 runner = QiskitHumanEvalRunner(
@@ -240,278 +230,309 @@ runner = QiskitHumanEvalRunner(
 # Load and evaluate
 samples = runner.load_dataset()
 results = runner.evaluate(
-    samples, 
-    system_prompt=system_prompt,
-    save_results="results.json"
+    samples,
+    system_prompt=get_system_prompt("qiskit_humaneval"),
+    save_results="results/qwen_humaneval.json"
 )
 
-print(f"Pass@1: {results.metrics['pass@1']:.4f}")
-print(f"Pass@5: {results.metrics['pass@5']:.4f}")
-print(f"Pass@10: {results.metrics['pass@10']:.4f}")
+print(f"Pass@1: {results.metrics['pass@1']:.2%}")
+print(f"Pass@5: {results.metrics['pass@5']:.2%}")
+print(f"Pass@10: {results.metrics['pass@10']:.2%}")
 ```
 
-**Synthetic Dataset:**
+### Synthetic Dataset
 
 ```python
 from evaluate.runners import SyntheticDatasetRunner
-from models.client import VLMClient
+from models import VLMClient
 
-# Create VLM client
 client = VLMClient(
     base_url="http://localhost:8000/v1",
-    model_name="qwen2-vl"
+    model_name="qwen3-vl-quantum"
 )
 
-# Create runner
 runner = SyntheticDatasetRunner(
-    test_split_path="outputs/splits/test.pkl",
+    dataset_path="outputs/final",
     model_client=client,
-    images_dir="outputs/images"
+    images_dir="outputs/images",
+    k_values=[1],
+    num_samples_per_task=1
 )
 
-# Evaluate
-results = runner.evaluate(num_predictions=1, save_results="results.json")
+samples = runner.load_dataset(split="test")
+results = runner.evaluate(
+    samples,
+    system_prompt=get_system_prompt("qiskit_humaneval_minimal"),
+    save_results="results/qwen_synthetic.json"
+)
 
-print(f"Success Rate: {results.success_rate:.1%}")
-for metric, value in results.metrics["overall"].items():
-    print(f"{metric}: {value:.4f}")
+# By type
+print(f"Function Completion Pass@1: {results.metrics['by_type.function_completion']['pass@1']:.2%}")
+print(f"Code Generation Pass@1: {results.metrics['by_type.code_generation']['pass@1']:.2%}")
+print(f"QA ROUGE-L: {results.metrics['by_type.qa']['rouge_l']:.2%}")
+
+# By modality
+print(f"Text-only Pass@1: {results.metrics['by_modality.text']['pass@1']:.2%}")
+print(f"Multimodal Pass@1: {results.metrics['by_modality.multimodal']['pass@1']:.2%}")
 ```
 
-## Configuration
+## Results Format
 
-### YAML Configuration Files
-
-Configuration files are stored in `config/`:
-
-- `eval_config.yaml` - Qiskit HumanEval evaluation
-- `eval_synthetic.yaml` - Synthetic multimodal dataset evaluation
-- `eval.env.example` - Environment variables template
-
-### Environment Variables
-
-The evaluation module uses the project's main `.env` file located at the project root.
-
-Add these variables to your `.env` file:
-
-```bash
-# Evaluation Model Configuration
-MODEL_BASE_URL=https://api.deepinfra.com/v1
-API_KEY=your-api-key-here
-MODEL_NAME=openai/gpt-oss-120b
-```
-
-These are automatically loaded and resolved in YAML files using `${VAR_NAME}` syntax.
-
-### Configuration Schema
-
-The configuration uses Pydantic models with validation:
-
-**ModelConfig:**
-- `base_url`: Model API endpoint
-- `api_key`: API key (supports env vars)
-- `model_name`: Model identifier
-- `is_vlm`: Whether it's a vision-language model
-- `max_tokens`, `temperature`, `timeout`: Generation parameters
-
-**DatasetConfig:**
-- `type`: "qiskit_humaneval" or "synthetic"
-- `path`: Path to dataset file
-- `dataset_type`: "normal" (completion) or "hard" (full generation)
-- `images_dir`: Directory for images (synthetic only)
-- `max_samples`: Limit for testing
-
-**MetricsConfig:**
-- `num_samples_per_task`: Solutions per task (Pass@k)
-- `k_values`: K values for Pass@k computation
-- `execution_timeout`: Code execution timeout
-- `num_predictions`: Predictions per sample
-- `system_prompt_type`: System prompt type ("qiskit_humaneval", "qiskit_humaneval_minimal", "generic", "custom", or null)
-- `custom_system_prompt`: Custom prompt text (when system_prompt_type is "custom")
-- `verify_canonical`: Whether to verify canonical solutions first
-
-**OutputConfig:**
-- `results_file`: Where to save results JSON
-- `results_dir`: Results directory
-
-## Dataset Types
-
-The Qiskit HumanEval benchmark has two dataset types:
-
-### Normal (Code Completion)
-The prompt contains initial code with imports and function signatures.
-The model completes the function body. The final executable code is:
-`prompt + generated_completion`
-
-### Hard (Full Code Generation)
-The prompt is a natural language question describing the task.
-The model generates the complete code from scratch. The final executable code
-is just the generated code.
-
-Use `--dataset-type normal` or `--dataset-type hard` to specify the type,
-or set `dataset_type` in the YAML configuration.
-
-## Metrics Explanation
-
-### Pass@k
-
-Pass@k measures the probability that at least one of k generated code samples
-passes all test cases. We use the unbiased estimator from the HumanEval paper:
-
-```
-pass@k = 1 - (n-c choose k) / (n choose k)
-```
-
-where:
-- n = total samples generated
-- c = number of correct samples
-- k = number of samples to consider
-
-### BLEU
-
-BLEU (Bilingual Evaluation Understudy) measures n-gram overlap between
-predicted and reference texts. Useful for caption and summary evaluation.
-
-### ROUGE-L
-
-ROUGE-L measures the longest common subsequence between predicted and
-reference texts. Better for semantic similarity than BLEU.
-
-## Code Execution Sandbox
-
-The code executor runs generated code in an isolated subprocess with:
-- Configurable timeout (default: 30s)
-- Safe execution environment
-- Automatic test case validation
-- Detailed error reporting
-
-## Results Organization
-
-Results are automatically organized into a structured directory:
-
-```
-outputs/evaluate/
-├── qiskit-humaneval/
-│   ├── qwen2.5-coder-14b_n10_k1-5-10_20241125_143022.json
-│   └── gpt-oss-120b_n10_k1-5-10_20241125_150000.json
-├── qiskit-humaneval-hard/
-│   └── ...
-└── synthetic/
-    └── ...
-```
-
-Filenames include: `{model}_{n-samples}_{k-values}_{timestamp}.json`
-
-## Evaluation Results Format
-
-Results are saved as JSON with the following structure:
+Results are saved as JSON with comprehensive metadata:
 
 ```json
 {
   "metadata": {
     "run_info": {
-      "timestamp": "2024-11-25T14:30:22",
-      "timestamp_unix": 1732545022
+      "timestamp": "2025-12-11T14:30:22",
+      "duration_seconds": 1847
     },
     "model": {
-      "name": "qwen2.5-coder-14b"
+      "name": "qwen3-vl-quantum",
+      "type": "vlm",
+      "base_url": "http://localhost:8000/v1"
     },
     "dataset": {
-      "path": "path/to/dataset.json",
-      "type": "qiskit_humaneval",
-      "variant": "normal",
-      "num_samples": 151
+      "type": "synthetic",
+      "path": "outputs/final",
+      "split": "test",
+      "num_samples": 1290
     },
     "evaluation": {
-      "solutions_per_task": 10,
-      "k_values": [1, 5, 10],
-      "timeout": 30,
-      "system_prompt": "You are the Qiskit code assistant...",
-      "verify_canonical": true
+      "solutions_per_task": 1,
+      "k_values": [1],
+      "timeout": 60,
+      "system_prompt_type": "qiskit_humaneval_minimal"
     }
   },
   "metrics": {
-    "pass@1": 0.4567,
-    "pass@5": 0.7234,
-    "pass@10": 0.8456,
-    "execution_accuracy": 0.5123
-  },
-  "canonical_verification": {
-    "verified": true,
-    "passed": 151,
-    "failed": 0
-  },
-  "results": [
-    {
-      "task_id": "qiskitHumanEval/0",
-      "prompt": "from qiskit import...",
-      "canonical_solution": "def solution():...",
-      "test": "check(solution)",
-      "generated_solutions": [
-        {
-          "code": "def solution():...",
-          "passed": true,
-          "error": null
-        }
-      ],
-      "num_passed": 8,
-      "pass_rate": 0.8
+    "overall": {
+      "pass@1": 0.5050,
+      "rouge_l": 0.3802
+    },
+    "by_type.function_completion": {
+      "count": 388,
+      "pass@1": 0.5696
+    },
+    "by_type.code_generation": {
+      "count": 408,
+      "pass@1": 0.4436
+    },
+    "by_type.qa": {
+      "count": 494,
+      "rouge_l": 0.3802,
+      "bleu": 0.2004
+    },
+    "by_category.circuits_and_gates": {
+      "count": 436,
+      "pass@1": 0.6147
     }
-  ]
+  },
+  "results": [...]
 }
 ```
 
-The results include:
-- **prompt**: The original input prompt
-- **canonical_solution**: The expected correct solution
-- **test**: The test code for verification
-- **generated_solutions**: Each generated solution with execution results
-- **pass_rate**: Percentage of solutions that passed
+## CLI Commands
 
-## Extending the Framework
-
-### Adding a New Metric
-
-```python
-from evaluate.metrics.base import Metric
-
-class MyMetric(Metric):
-    @property
-    def name(self) -> str:
-        return "my_metric"
-
-    def compute(self, predictions, references, **kwargs) -> float:
-        # Implement your metric logic
-        return score
-```
-
-### Adding a New Evaluator
-
-```python
-from evaluate.evaluators.base import Evaluator, EvaluationResult
-
-class MyEvaluator(Evaluator):
-    def evaluate_sample(self, sample, predictions):
-        # Implement evaluation logic
-        return EvaluationResult(...)
-
-    def aggregate_results(self, results):
-        # Aggregate individual results
-        return AggregatedResults(...)
-```
-
-## Testing
-
-Run tests with:
+### Run Evaluation
 
 ```bash
-pytest tests/test_evaluation.py -v
+# From config file
+evaluate run --config config.yaml
+
+# Direct CLI arguments
+evaluate qiskit-humaneval \
+    --dataset data/qiskit_humaneval.json \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen2.5-coder-14b \
+    --num-samples 10 \
+    --k-values "1,5,10" \
+    --system-prompt qiskit \
+    --output results/qwen_humaneval.json
 ```
+
+### Compare Results
+
+```bash
+# Compare all results in directory
+evaluate compare --results-dir outputs/evaluate
+
+# Generates comparison table and plots
+```
+
+### Verify Canonical Solutions
+
+Ensure benchmark correctness by testing canonical solutions:
+
+```bash
+evaluate verify-canonical \
+    --dataset data/qiskit_humaneval.json \
+    --dataset-type normal
+
+# Should show 100% pass rate
+```
+
+## Code Execution Sandbox
+
+Generated code is executed in an isolated subprocess:
+
+- **Timeout**: Configurable (default 60s)
+- **Safe execution**: Limited syscalls, no network access
+- **Test validation**: Automatic check against unit tests
+- **Error reporting**: Captures stack traces for debugging
+
+Configuration:
+
+```yaml
+metrics:
+  execution_timeout: 60        # Seconds
+  max_concurrent_executions: 4 # Parallel test runs
+```
+
+## Model Serving with vLLM
+
+For efficient inference, use vLLM:
+
+```bash
+# Start vLLM server
+vllm serve qwen2.5-coder-14b \
+    --port 8000 \
+    --tensor-parallel-size 1 \
+    --max-model-len 8192
+
+# Evaluate
+evaluate qiskit-humaneval \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen2.5-coder-14b \
+    --dataset data/qiskit_humaneval.json
+```
+
+For VLMs (multimodal):
+
+```bash
+vllm serve qwen/Qwen3-VL-8B-Instruct \
+    --port 8000 \
+    --tensor-parallel-size 1 \
+    --max-model-len 4096 \
+    --max-num-seqs 4  # Lower for VLMs
+```
+
+## Example: Full Evaluation Pipeline
+
+```bash
+#!/bin/bash
+
+# 1. Start vLLM server (in separate terminal)
+vllm serve qwen/Qwen3-VL-8B-Instruct --port 8000 &
+
+# Wait for server to start
+sleep 30
+
+# 2. Evaluate on Qiskit HumanEval
+evaluate qiskit-humaneval \
+    --dataset benchmarks/qiskit_humaneval.json \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen3-vl-quantum \
+    --vlm \
+    --num-samples 1 \
+    --k-values "1" \
+    --output results/humaneval.json
+
+# 3. Evaluate on Qiskit HumanEval Hard
+evaluate qiskit-humaneval \
+    --dataset benchmarks/qiskit_humaneval_hard.json \
+    --dataset-type hard \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen3-vl-quantum \
+    --vlm \
+    --num-samples 1 \
+    --output results/humaneval_hard.json
+
+# 4. Evaluate on synthetic dataset
+evaluate synthetic \
+    --dataset outputs/final \
+    --model-url http://localhost:8000/v1 \
+    --model-name qwen3-vl-quantum \
+    --vlm \
+    --split test \
+    --output results/synthetic.json
+
+# 5. Compare results
+evaluate compare --results-dir results/
+
+# Stop vLLM server
+pkill -f vllm
+```
+
+## Performance Tips
+
+### Batch Processing
+
+Enable batch processing for faster evaluation:
+
+```python
+runner = QiskitHumanEvalRunner(
+    ...,
+    batch_size=10,  # Process 10 samples at once
+)
+```
+
+### Caching
+
+Results are cached by default. To force re-evaluation:
+
+```bash
+evaluate qiskit-humaneval ... --no-cache
+```
+
+### Parallel Execution
+
+For code execution, adjust concurrency:
+
+```yaml
+metrics:
+  max_concurrent_executions: 8  # Increase for faster test runs
+```
+
+## Troubleshooting
+
+### Timeout Errors
+
+Increase execution timeout for complex code:
+
+```yaml
+metrics:
+  execution_timeout: 120  # 2 minutes
+```
+
+### Connection Errors
+
+Check vLLM server is running:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+### Memory Issues
+
+For large evaluations, process in batches:
+
+```bash
+# Evaluate first 50 samples
+evaluate qiskit-humaneval ... --max-samples 50
+```
+
+## Documentation
+
+- **Evaluation Methodology**: See [docs/evaluate.md](../../docs/evaluate.md) for detailed analysis of results, metrics interpretation, and comparative studies
+- **System Prompts**: See [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md) for complete prompt templates
 
 ## References
 
-- Qiskit HumanEval: https://arxiv.org/abs/2406.14712
-- HumanEval: https://arxiv.org/abs/2107.03374
-- BLEU: https://aclanthology.org/P02-1040/
-- ROUGE: https://aclanthology.org/W04-1013/
-"""
+- [Qiskit HumanEval Paper](https://arxiv.org/abs/2406.14712) - Vishwakarma et al., 2024
+- [HumanEval Paper](https://arxiv.org/abs/2107.03374) - Chen et al., 2021
+- [vLLM](https://arxiv.org/abs/2309.06180) - Kwon et al., 2023
 
+## License
+
+Apache 2.0

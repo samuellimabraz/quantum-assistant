@@ -299,9 +299,7 @@ class DatasetPlotter:
         text_counts = [self.statistics.splits[s].text_only for s in splits]
         totals = [mm + txt for mm, txt in zip(mm_counts, text_counts)]
 
-        mm_texts = [
-            f"{c:,} ({c/t*100:.0f}%)" if t > 0 else "" for c, t in zip(mm_counts, totals)
-        ]
+        mm_texts = [f"{c:,} ({c/t*100:.0f}%)" if t > 0 else "" for c, t in zip(mm_counts, totals)]
         text_texts = [
             f"{c:,} ({c/t*100:.0f}%)" if t > 0 else "" for c, t in zip(text_counts, totals)
         ]
@@ -755,9 +753,7 @@ class DatasetPlotter:
                     },
                     cells={
                         "values": cell_values,
-                        "fill_color": [
-                            [Colors.BACKGROUND, Colors.WHITE] * len(cell_values[0])
-                        ],
+                        "fill_color": [[Colors.BACKGROUND, Colors.WHITE] * len(cell_values[0])],
                         "font": {"size": 9, "color": Colors.TEXT_PRIMARY},
                         "align": "left",
                         "height": 28,

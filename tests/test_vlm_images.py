@@ -1,102 +1,171 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+import pytest
+from PIL import Image
 
-from synthetic_data.models import VLMClient
+from synthetic_data.utils.image_converter import ImageLoader
 
 
-def test_vlm_with_images():
-    """Test VLM client with various image formats using config prompts."""
-    load_dotenv()
+class TestImageLoader:
 
-    base_url = os.getenv("VISION_MODEL_BASE_URL")
-    api_key = os.getenv("VISION_MODEL_API_KEY")
-    model_name = os.getenv("VISION_MODEL_NAME")
+    def test_max_dimension_640(self, tmp_path: Path):
+        large_image = Image.new("RGB", (2000, 1500), color="blue")
+        test_path = tmp_path / "large_image.png"
+        large_image.save(test_path)
 
-    if not base_url or not api_key:
-        print("Vision model credentials not found in environment")
-        return
+        loader = ImageLoader(max_dimension=640)
+        result = loader.load(test_path)
 
-    client = VLMClient(
-        base_url=base_url,
-        api_key=api_key,
-        model_name=model_name,
-        max_tokens=4096,
-        temperature=0.1,
-    )
+        assert result.width <= 640
+        assert result.height <= 640
+        assert result.mode == "RGB"
 
-    # System and user prompts matching config.yaml
-    system_prompt = """You are an expert in quantum computing, physics, and mathematics.
-    Provide a detailed, objective transcription of the image about quantum computing and qiskit.
+    def test_max_dimension_1024(self, tmp_path: Path):
+        large_image = Image.new("RGB", (2000, 1500), color="green")
+        test_path = tmp_path / "large_image.png"
+        large_image.save(test_path)
 
-    Requirements:
-    - Be extremely detailed and precise.
-    - Dont provide any explanation about concepts. Any code.
-    - Use LaTeX formatting for math formulas.
-    - Describe circuit connections, gates, and qubits explicitly.
-    - Describes charts, graphs, and tables explicitly.
-    - Ignore UI elements, window borders, or irrelevant background.
-    - Focus on the technical content.
+        loader = ImageLoader(max_dimension=1024)
+        result = loader.load(test_path)
 
-    For quantum circuits:
-    - Describe the circuit definition with all qubits, gates, and measurements in an orderly and organized way. In layers from left to right, describe each operation that is applied to a qubit. Specify if the gate have some parameter
+        assert result.width <= 1024
+        assert result.height <= 1024
+        assert result.mode == "RGB"
 
-    For Bloch spheres:
-    - Describe the position of each vector precisely (which axis or plane)
-    - State which pure state or superposition each vector represents
-    - Note any labels or annotations on the sphere
+    def test_small_image_unchanged(self, tmp_path: Path):
+        small_image = Image.new("RGB", (300, 200), color="red")
+        test_path = tmp_path / "small_image.png"
+        small_image.save(test_path)
 
-    For charts/histograms:
-    - Describe axis labels, units, and ranges
-    - Identify key data points and values
-    - Note patterns in measurement results
+        loader = ImageLoader(max_dimension=640)
+        result = loader.load(test_path)
 
-    For diagrams/formulas:
-    - Transcribe formulas using LaTeX notation
-    - Describe structure and connections
-    - Identify quantum states and operations"""
+        assert result.width == 300
+        assert result.height == 200
 
-    user_prompt = """Provide a detailed, objective transcription of this image related to quantum computing, qiskit, physics, mathematics, or code. Dont provide any explanation about concepts. Any code.
-    If the image is not related to quantum computing, Qiskit, physics, mathematics, or code, describe in simple terms what it is.
-    The idea is that it should be possible to understand the image without looking at it."""
+    def test_aspect_ratio_preserved(self, tmp_path: Path):
+        wide_image = Image.new("RGB", (2000, 500), color="yellow")
+        test_path = tmp_path / "wide_image.png"
+        wide_image.save(test_path)
 
-    test_images = Path("assets/tests")
-    if not test_images.exists():
-        print(f"Test images directory not found: {test_images}")
-        return
+        loader = ImageLoader(max_dimension=640)
+        result = loader.load(test_path)
 
-    image_files = list(test_images.glob("*"))
+        original_ratio = 2000 / 500
+        result_ratio = result.width / result.height
+        assert abs(original_ratio - result_ratio) < 0.01
 
-    print(f"Found {len(image_files)} test images")
-    print("=" * 60)
+    def test_rgba_to_rgb_conversion(self, tmp_path: Path):
+        rgba_image = Image.new("RGBA", (400, 300), color=(255, 0, 0, 128))
+        test_path = tmp_path / "rgba_image.png"
+        rgba_image.save(test_path)
 
-    for img_path in image_files:
-        if img_path.suffix.lower() not in [".png", ".jpg", ".jpeg", ".svg", ".avif"]:
-            continue
+        loader = ImageLoader(max_dimension=640)
+        result = loader.load(test_path)
 
-        print(f"\nTesting: {img_path.name}")
-        print(f"  Format: {img_path.suffix}")
-        print(f"  Size: {img_path.stat().st_size / 1024:.1f} KB")
+        assert result.mode == "RGB"
 
-        try:
-            response = client.generate_with_image(
-                text=user_prompt,
-                image_path=img_path,
-                system_prompt=system_prompt,
-                max_tokens=4096,
-            )
+    def test_grayscale_to_rgb(self, tmp_path: Path):
+        gray_image = Image.new("L", (400, 300), color=128)
+        test_path = tmp_path / "gray_image.png"
+        gray_image.save(test_path)
 
-            print(f"  Response: {response}")
-            print("  ✓ Success")
+        loader = ImageLoader(max_dimension=640)
+        result = loader.load(test_path)
 
-        except Exception as e:
-            print(f"  ✗ Error: {e}")
+        assert result.mode == "RGB"
 
-    client.close()
-    print("\n" + "=" * 60)
-    print("VLM image test completed!")
+    def test_load_as_base64_jpeg(self, tmp_path: Path):
+        test_image = Image.new("RGB", (400, 300), color="purple")
+        test_path = tmp_path / "test_image.png"
+        test_image.save(test_path)
+
+        loader = ImageLoader(max_dimension=640)
+        base64_str = loader.load_as_base64(test_path, output_format="JPEG", quality=95)
+
+        assert isinstance(base64_str, str)
+        assert len(base64_str) > 0
+
+        import base64
+        import io
+
+        decoded = base64.b64decode(base64_str)
+        img = Image.open(io.BytesIO(decoded))
+        assert img.format == "JPEG"
+
+    def test_file_not_found(self):
+        loader = ImageLoader(max_dimension=640)
+
+        with pytest.raises(FileNotFoundError):
+            loader.load(Path("/nonexistent/path/image.png"))
+
+
+class TestVLMClientImageProcessing:
+
+    def test_vlm_client_uses_640_dimension(self):
+        from synthetic_data.models import VLMClient
+
+        client = VLMClient(
+            base_url="http://localhost:8000",
+            api_key="test",
+            model_name="test-model",
+        )
+
+        assert client.max_dimension == 640
+        assert client.image_loader.max_dimension == 640
+
+    def test_vlm_client_custom_dimension(self):
+        from synthetic_data.models import VLMClient
+
+        client = VLMClient(
+            base_url="http://localhost:8000",
+            api_key="test",
+            model_name="test-model",
+            max_dimension=512,
+        )
+
+        assert client.max_dimension == 512
+        assert client.image_loader.max_dimension == 512
+
+
+@pytest.mark.skipif(
+    not os.getenv("VISION_MODEL_BASE_URL"),
+    reason="Vision model credentials not configured",
+)
+class TestVLMIntegration:
+
+    def test_vlm_single_image(self):
+        from dotenv import load_dotenv
+
+        from synthetic_data.models import VLMClient
+
+        load_dotenv()
+
+        client = VLMClient(
+            base_url=os.getenv("VISION_MODEL_BASE_URL"),
+            api_key=os.getenv("VISION_MODEL_API_KEY"),
+            model_name=os.getenv("VISION_MODEL_NAME"),
+            max_tokens=4096,
+            temperature=0.1,
+        )
+
+        test_image = Path("assets/tests/90c68fb2-6ed5-41f3-a4f8-f73e92367c4c-0.svg")
+        if not test_image.exists():
+            pytest.skip(f"Test image not found: {test_image}")
+
+        response = client.generate_with_image(
+            text="Briefly describe this quantum circuit.",
+            image_path=test_image,
+            max_tokens=256,
+        )
+
+        client.close()
+
+        assert response
+        assert len(response) > 20
+        assert "circuit" in response.lower() or "quantum" in response.lower()
 
 
 if __name__ == "__main__":
-    test_vlm_with_images()
+    pytest.main([__file__, "-v", "-s"])

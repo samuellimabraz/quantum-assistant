@@ -6,10 +6,6 @@
 #   Example: ./scripts/experiment.sh pissa
 # =============================================================================
 
-# =============================================================================
-# Initial Experiments: Compare PEFT methods (1 epoch, r=16)
-# =============================================================================
-
 lora:
   model_name: Qwen3-VL-8B-lora
   output_dir: ./outputs/train/exp-lora
@@ -83,11 +79,6 @@ dora:
   freeze_vit: true
   freeze_aligner: false
 
-# =============================================================================
-# Ablation Experiments
-# =============================================================================
-
-# Ablation: freeze aligner (compare multimodal learning)
 rslora_frozen_aligner:
   model_name: Qwen3-VL-8B-rslora-frozen
   output_dir: ./outputs/train/exp-rslora-frozen

@@ -128,6 +128,14 @@ def _run_synthetic(config: EvaluationConfig, run_timestamp: datetime) -> None:
 
     samples = runner.load_dataset(split=config.dataset.split)
 
+    # Filter to text-only samples if requested
+    if config.dataset.text_only:
+        original_count = len(samples)
+        samples = [s for s in samples if s.get("image") is None]
+        console.print(
+            f"[yellow]Filtering to text-only: {len(samples)}/{original_count} samples[/yellow]"
+        )
+
     if config.dataset.max_samples:
         samples = samples[: config.dataset.max_samples]
         console.print(f"[yellow]Limiting to {config.dataset.max_samples} samples[/yellow]")
@@ -281,6 +289,9 @@ def synthetic(
     images_dir: Path = typer.Option(None, "--images-dir", help="Directory containing images"),
     is_vlm: bool = typer.Option(False, "--vlm", help="Use Vision-Language Model"),
     split: str = typer.Option("test", "--split", help="Dataset split to evaluate"),
+    text_only: bool = typer.Option(
+        False, "--text-only", help="Filter to text-only samples (no images)"
+    ),
     system_prompt: str = typer.Option(
         "",
         "--system-prompt",
@@ -357,6 +368,14 @@ def synthetic(
     )
 
     samples = runner.load_dataset(split=split)
+
+    # Filter to text-only samples if requested
+    if text_only:
+        original_count = len(samples)
+        samples = [s for s in samples if s.get("image") is None]
+        console.print(
+            f"[yellow]Filtering to text-only: {len(samples)}/{original_count} samples[/yellow]"
+        )
 
     if max_samples:
         samples = samples[:max_samples]

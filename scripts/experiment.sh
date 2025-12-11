@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BASE_CONFIG="${PROJECT_ROOT}/src/finetune/yaml/base.yaml"
-EXPERIMENTS_FILE="${PROJECT_ROOT}/src/finetune/experiments.yaml"
+EXPERIMENTS_FILE="${PROJECT_ROOT}/src/finetune/yaml/experiments.yaml"
 
 # Parse arguments
 EXPERIMENT_NAME=""

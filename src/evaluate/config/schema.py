@@ -54,6 +54,10 @@ class DatasetConfig(BaseModel):
         default="test",
         description="Dataset split to evaluate (train, validation, test). For synthetic datasets.",
     )
+    text_only: bool = Field(
+        default=False,
+        description="Filter to only text-only samples (no images). For synthetic datasets with LLMs.",
+    )
 
 
 class MetricsConfig(BaseModel):

@@ -181,6 +181,78 @@ class QiskitHumanEvalRunner:
         pattern = rf"def\s+{re.escape(entry_point)}\s*\("
         return bool(re.search(pattern, code))
 
+    def _get_function_body_indent(self, prompt: str) -> int:
+        """Get the expected indentation level for function body from prompt."""
+        lines = prompt.split("\n")
+        for line in reversed(lines):
+            stripped = line.lstrip()
+            if stripped.startswith('"""') or stripped.startswith("'''"):
+                # Found docstring end, body indent is same as docstring
+                return len(line) - len(stripped)
+            if stripped.startswith("def "):
+                # No docstring, body is def indent + 4
+                return len(line) - len(stripped) + 4
+        return 4  # Default indent
+
+    def _normalize_body_indentation(self, body: str, target_indent: int) -> str:
+        """
+        Normalize body indentation to target level.
+
+        Handles the common case where generated code has:
+        - First line at 0 indentation
+        - Subsequent lines with 4 spaces (relative to first line)
+        """
+        lines = body.split("\n")
+        if not lines:
+            return body
+
+        # Find first non-empty line and its indentation
+        first_line_idx = -1
+        first_indent = 0
+        for i, line in enumerate(lines):
+            if line.strip():
+                first_line_idx = i
+                first_indent = len(line) - len(line.lstrip())
+                break
+
+        if first_line_idx == -1:
+            return body  # All empty lines
+
+        # Find minimum indentation of subsequent non-empty lines
+        subsequent_indents = []
+        for i, line in enumerate(lines):
+            if i > first_line_idx and line.strip():
+                subsequent_indents.append(len(line) - len(line.lstrip()))
+
+        # Determine base indentation to remove
+        if first_indent == 0 and subsequent_indents:
+            # First line at 0, subsequent lines indented relative to it
+            min_subsequent = min(subsequent_indents)
+            base_indent = 0  # First line is the base
+        else:
+            # All lines have consistent base
+            all_indents = [first_indent] + subsequent_indents
+            base_indent = min(all_indents) if all_indents else 0
+
+        # Rebuild with target indentation
+        result_lines = []
+        for i, line in enumerate(lines):
+            if not line.strip():
+                result_lines.append("")
+            else:
+                current_indent = len(line) - len(line.lstrip())
+                if first_indent == 0 and subsequent_indents and i > first_line_idx:
+                    # Adjust subsequent lines: remove their extra base, add target
+                    relative = current_indent - min(subsequent_indents)
+                    new_indent = target_indent + relative
+                else:
+                    # Standard case: remove base, add target
+                    relative = current_indent - base_indent
+                    new_indent = target_indent + relative
+                result_lines.append(" " * new_indent + line.lstrip())
+
+        return "\n".join(result_lines)
+
     def combine_code(self, sample: dict[str, Any], generated: str) -> str:
         """
         Combine prompt and generated code based on dataset type.
@@ -198,16 +270,13 @@ class QiskitHumanEvalRunner:
         if self.dataset_type == DatasetType.NORMAL:
             # Check if model generated full code with function definition
             if entry_point and self._generated_has_function_def(generated, entry_point):
-                # Model generated full code - use it directly instead of concatenating
-                # This handles cases where the model doesn't understand it should
-                # only complete the function body
+                # Model generated full code - use it directly
                 return generated
             else:
-                # Model generated just the function body - concatenate with prompt
-                # Ensure there's a newline separator to avoid syntax errors
-                if not generated.startswith("\n"):
-                    generated = "\n" + generated
-                return prompt + generated
+                # Model generated just the function body - need to properly indent it
+                target_indent = self._get_function_body_indent(prompt)
+                normalized = self._normalize_body_indentation(generated, target_indent)
+                return prompt + "\n" + normalized
         else:
             # Hard: model generates full code
             return generated

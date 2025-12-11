@@ -18,7 +18,7 @@ model:
   max_tokens: 4096
   temperature: 0.0 # Greedy decoding for deterministic evaluation
   timeout: 300.0
-  is_vlm: true # Enable vision-language model for multimodal samples
+  is_vlm: true
 
 # Dataset Configuration
 dataset:
@@ -31,6 +31,8 @@ dataset:
   split: "test"
   # Limit samples for testing (null for all)
   max_samples: null
+  # Filter to text-only samples (no images) - useful for LLMs without vision
+  text_only: false
 
 # Metrics Configuration
 metrics:
