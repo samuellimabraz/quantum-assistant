@@ -428,7 +428,7 @@ Output: outputs/final/ (HuggingFace DatasetDict)
 
 **Modules:** `dataset/analyzer.py`, `dataset/plotter.py`, `tools/pipeline_analyzer.py`
 
-Generates comprehensive statistics and professional visualizations.
+Generates statistics and visualizations.
 
 ```
 Output: outputs/analysis/
@@ -817,7 +817,7 @@ outputs/
 
 ## Checkpoint and Retry System
 
-All long-running stages support robust fault tolerance with checkpoints and automatic retries.
+All long-running stages support fault tolerance with checkpoints and automatic retries.
 
 ### Automatic Retry Logic
 

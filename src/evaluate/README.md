@@ -278,7 +278,7 @@ print(f"Multimodal Pass@1: {results.metrics['by_modality.multimodal']['pass@1']:
 
 ## Results Format
 
-Results are saved as JSON with comprehensive metadata:
+Results are saved as JSON with metadata:
 
 ```json
 {

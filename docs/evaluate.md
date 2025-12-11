@@ -1,6 +1,6 @@
 # Evaluation Methodology and Results Analysis
 
-Comprehensive evaluation of vision-language models specialized for quantum computing across three benchmarks: Qiskit HumanEval, Qiskit HumanEval Hard, and the synthetic multimodal dataset.
+Evaluation of vision-language models specialized for quantum computing across three benchmarks: Qiskit HumanEval, Qiskit HumanEval Hard, and the synthetic multimodal dataset.
 
 ## Table of Contents
 
@@ -116,7 +116,7 @@ def check(candidate):
 
 **Statistics:**
 - Problems: 151
-- Difficulty: 54 basic, 95 intermediate, 2 advanced
+- Difficulty: 54 basic, 95 intermediate, 2 difficult
 - Coverage: All 7 quantum categories
 
 ### 2. Qiskit HumanEval Hard
@@ -341,7 +341,7 @@ def create_bell():
 | Category | Qwen3-VL-FT (r32, 2ep) | Baseline | Note |
 |----------|------------------------|----------|------|
 | **primitives_and_execution** | **32.18%** | 10.34% | Newer APIs, less training data |
-| **noise_and_error_mitigation** | **42.86%** | 4.76% | Advanced topic, least samples |
+| **noise_and_error_mitigation** | **42.86%** | 4.76% | Specialized topic, least samples |
 
 ## Detailed Analysis
 
@@ -545,7 +545,7 @@ Our synthetic dataset categories map to HumanEval as:
    - Single-attempt metric more restrictive
 
 3. **Category imbalance**
-   - Advanced topics (noise mitigation, primitives) underrepresented
+   - Specialized topics (noise mitigation, primitives) underrepresented
    - Affects performance on specialized problems
 
 4. **Text-only IBM model comparison**

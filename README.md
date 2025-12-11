@@ -1,6 +1,6 @@
 # Quantum Assistant
 
-Specializing multimodal vision-language models for quantum computing with Qiskit through synthetic data generation, efficient fine-tuning, and comprehensive evaluation.
+Specializing multimodal vision-language models for quantum computing with Qiskit through synthetic data generation, efficient fine-tuning, and evaluation.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Dataset](https://img.shields.io/badge/🤗%20Dataset-Quantum%20Assistant-yellow)](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
@@ -13,8 +13,8 @@ This project addresses a fundamental limitation in quantum computing code assist
 
 1. **Synthetic Dataset Pipeline**: Automated extraction and generation of multimodal training data from open-source Qiskit documentation, with executable code verification
 2. **Quantum Assistant Dataset**: 8,366 samples (45% multimodal) across 7 quantum computing categories, publicly available under Apache 2.0
-3. **VLM Specialization**: Fine-tuning experiments using Parameter-Efficient techniques (LoRA and variants) with ms-swift framework
-4. **Evaluation**: Assessment framework for Qiskit HumanEval benchmarks and multimodal tasks
+3. **VLM Specialization**: Fine-tuning with Parameter-Efficient techniques (LoRA and variants) using ms-swift framework
+4. **Evaluation**: Assessment on Qiskit HumanEval benchmarks and multimodal tasks
 
 ### Key Results
 
@@ -170,10 +170,6 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 
 🤗 [samuellimabraz/quantum-assistant](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
 
-<a href="https://huggingface.co/datasets/samuellimabraz/quantum-assistant">
-  <img src="https://huggingface.co/datasets/samuellimabraz/quantum-assistant/resolve/main/figures/overview_dashboard.png" alt="Dataset Overview" width="100%">
-</a>
-
 ### Statistics
 
 | Metric | Value |
@@ -198,10 +194,6 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 5. `transpilation_and_compilation` (8%)
 6. `primitives_and_execution` (6%)
 7. `noise_and_error_mitigation` (5%)
-
-### Explore the Dataset
-
-**Interactive Viewer:** [Browse samples on HuggingFace](https://huggingface.co/datasets/samuellimabraz/quantum-assistant/viewer/)
 
 ### Loading the Dataset
 
