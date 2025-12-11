@@ -16,14 +16,37 @@ This project addresses a fundamental limitation in quantum computing code assist
 3. **VLM Specialization**: Fine-tuning with Parameter-Efficient techniques (LoRA and variants) using ms-swift framework
 4. **Evaluation**: Assessment on Qiskit HumanEval benchmarks and multimodal tasks
 
+<p align="center">
+  <img src="assets/images/synthetic-pipeline.png" alt="Synthetic Data Pipeline" width="95%">
+  <br>
+  <em>End-to-end pipeline for generating multimodal quantum computing training data</em>
+</p>
+
 ### Key Results
 
-- **Qiskit HumanEval**: 43.71% Pass@1 (baseline: 32.45%, +11.26 pp)
-- **Qiskit HumanEval Hard**: 29.14% Pass@1 (baseline: 11.92%, +17.22 pp)  
-- **Multimodal Advantage**: 63.39% Pass@1 on image-based samples vs 45.45% on text-only (+17.94 pp)
-- **Parameter Efficiency**: LoRA adapters on 8B base model achieve competitive results with 14B models
+| Model | QHE | QHE Hard | Syn. FC | Syn. CG | Syn. QA | Text | MM |
+|-------|:---:|:--------:|:-------:|:-------:|:-------:|:----:|:--:|
+| | Pass@1 | Pass@1 | Pass@1 | Pass@1 | ROUGE-L | Pass@1 | Pass@1 |
+| **Fine-tuned** ||||||||
+| Qwen3-VL-FT (r32, 2ep) | 43.71 | 28.48 | **56.96** | **44.36** | 38.02 | **45.45** | **63.39** |
+| Qwen3-VL-FT (r32, 1ep) | 40.40 | **29.14** | 51.55 | 41.91 | 37.31 | 42.49 | 57.14 |
+| Qwen3-VL-FT (r64, 1ep) | 38.41 | 22.52 | 52.84 | 42.89 | **38.24** | 42.66 | 60.71 |
+| **Specialized** ||||||||
+| Qwen2.5-Coder-14B-Qiskit† | **49.01** | 25.17 | 47.48 | 25.51 | 19.46 | 36.19 | — |
+| **Baseline** ||||||||
+| Qwen3-VL-8B-Instruct | 32.45 | 11.92 | 38.92 | 25.98 | 20.66 | 30.24 | 37.50 |
+| InternVL3.5-8B-MPO | 20.53 | 9.27 | 32.47 | 19.61 | 25.81 | 21.85 | 36.16 |
+| Ministral-3-8B-Instruct-2512 | 17.88 | 11.26 | 29.12 | 21.81 | 20.50 | 20.98 | 36.61 |
 
-Best configuration: **rsLoRA with rank=32, 1 epoch** on Qwen3-VL-8B-Instruct.
+<sub>**QHE**: Qiskit HumanEval (function completion) · **QHE Hard**: code generation · **Syn. FC/CG/QA**: Synthetic Function Completion/Code Generation/Question Answering · **Text**: text-only samples · **MM**: multimodal samples · †evaluated on text-only samples (55% of synthetic dataset)</sub>
+
+Best configuration: **rsLoRA with rank=32** on Qwen3-VL-8B-Instruct.
+
+<p align="center">
+  <img src="assets/images/fig_combined_results.png" alt="Evaluation Results" width="95%">
+  <br>
+  <em>Evaluation across benchmarks showing fine-tuning gains and multimodal advantage</em>
+</p>
 
 ## Project Structure
 
@@ -170,6 +193,12 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 
 🤗 [samuellimabraz/quantum-assistant](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
 
+<p align="center">
+  <img src="assets/images/fig_overview_dashboard.png" alt="Dataset Overview" width="95%">
+  <br>
+  <em>Dataset composition: distribution by task type, category, modality, and test coverage</em>
+</p>
+
 ### Statistics
 
 | Metric | Value |
@@ -194,6 +223,8 @@ The **Quantum Assistant Dataset** is publicly available on HuggingFace:
 5. `transpilation_and_compilation` (8%)
 6. `primitives_and_execution` (6%)
 7. `noise_and_error_mitigation` (5%)
+
+
 
 ### Loading the Dataset
 
@@ -222,6 +253,18 @@ Fine-tuned models are available in the HuggingFace collection:
 | Qwen3-VL-FT (r64, 1ep) | rsLoRA r=64, 1 epoch | 38.41% | 47.74% |
 
 Baseline: Qwen3-VL-8B-Instruct (32.45% / 32.29%)
+
+<p align="center">
+  <img src="assets/images/fig8_humaneval_combined.png" alt="HumanEval Results" width="85%">
+  <br>
+  <em>Qiskit HumanEval benchmark results: fine-tuned models outperform baselines by +11-17 pp</em>
+</p>
+
+<p align="center">
+  <img src="assets/images/fig4_category_heatmap.png" alt="Category Heatmap" width="85%">
+  <br>
+  <em>Performance heatmap by category showing fine-tuned models vs baselines (Pass@1 %)</em>
+</p>
 
 ## Documentation
 
