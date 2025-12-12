@@ -1,0 +1,257 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+@layer base {
+  * {
+    @apply border-zinc-800;
+  }
+
+  body {
+    @apply bg-zinc-950 text-zinc-100 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  ::selection {
+    @apply bg-teal-600/40 text-white;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-zinc-700 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-600;
+  }
+}
+
+@layer utilities {
+  .animate-in {
+    animation: animateIn 0.3s ease-out forwards;
+  }
+
+  @keyframes animateIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .typing-indicator span {
+    @apply inline-block w-2 h-2 bg-teal-500 rounded-full mx-0.5;
+    animation: typing 1.4s infinite ease-in-out both;
+  }
+
+  .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+  .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0s; }
+
+  @keyframes typing {
+    0%, 80%, 100% {
+      transform: scale(0.8);
+      opacity: 0.5;
+    }
+    40% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+}
+
+/* Code block wrapper - clean backgrounds */
+.code-block-wrapper pre,
+.code-block-wrapper code,
+.code-block-wrapper span {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.code-block-wrapper pre > div {
+  background: #18181b !important;
+}
+
+.code-block-wrapper .token {
+  background: transparent !important;
+}
+
+.code-block-wrapper pre code span {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: none;
+  outline: none;
+}
+
+/* Markdown styling */
+.markdown-content {
+  @apply leading-relaxed;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  @apply font-semibold text-zinc-100 mt-6 mb-3;
+}
+
+.markdown-content h1 { @apply text-2xl; }
+.markdown-content h2 { @apply text-xl; }
+.markdown-content h3 { @apply text-lg; }
+
+.markdown-content p {
+  @apply mb-4 text-zinc-300;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  @apply mb-4 pl-6 text-zinc-300;
+}
+
+.markdown-content ul { @apply list-disc; }
+.markdown-content ol { @apply list-decimal; }
+
+.markdown-content li {
+  @apply mb-1;
+}
+
+.markdown-content code:not(pre code) {
+  @apply bg-zinc-800 px-1.5 py-0.5 rounded text-teal-300 text-sm font-mono;
+}
+
+.markdown-content pre {
+  @apply mb-4 !bg-zinc-900 rounded-lg overflow-x-auto;
+}
+
+.markdown-content a {
+  @apply text-teal-400 hover:text-teal-300 underline underline-offset-2;
+}
+
+.markdown-content blockquote {
+  @apply border-l-4 border-teal-600/50 pl-4 italic text-zinc-400 my-4;
+}
+
+.markdown-content hr {
+  @apply border-zinc-800 my-6;
+}
+
+.markdown-content table {
+  @apply w-full border-collapse mb-4;
+}
+
+.markdown-content th,
+.markdown-content td {
+  @apply border border-zinc-700 px-3 py-2 text-left;
+}
+
+.markdown-content th {
+  @apply bg-zinc-800 font-medium;
+}
+
+/* KaTeX math styling for dark theme */
+.markdown-content .katex {
+  @apply text-zinc-100;
+  font-size: 1.1em;
+}
+
+.markdown-content .katex-display {
+  @apply my-4 overflow-x-auto overflow-y-hidden py-2;
+}
+
+.markdown-content .katex-display > .katex {
+  @apply text-zinc-100;
+}
+
+/* Inline math styling */
+.markdown-content .math-inline {
+  @apply text-zinc-100;
+}
+
+/* Display/block math styling */
+.markdown-content .math-display {
+  @apply bg-zinc-800/50 rounded-lg px-4 py-3 my-4;
+}
+
+/* KaTeX color overrides for dark theme */
+.katex .mord,
+.katex .mbin,
+.katex .mrel,
+.katex .mopen,
+.katex .mclose,
+.katex .mpunct,
+.katex .minner {
+  color: inherit;
+}
+
+.katex .mathnormal {
+  color: #93c5fd; /* blue-300 for variables */
+}
+
+.katex .text {
+  color: #d4d4d8; /* zinc-300 */
+}
+
+.katex .mop {
+  color: #c4b5fd; /* violet-300 for operators like sum, integral */
+}
+
+.katex .sqrt > .root {
+  color: #86efac; /* emerald-300 */
+}
+
+.katex-html {
+  color: #e4e4e7; /* zinc-200 */
+}
+
+/* Execution result styling */
+.execution-output {
+  @apply font-mono text-sm;
+}
+
+.execution-output pre {
+  @apply whitespace-pre-wrap break-words;
+}
+
+/* Circuit ASCII art preservation */
+.circuit-output {
+  @apply font-mono text-xs leading-tight tracking-tight;
+  font-feature-settings: "liga" 0;
+}
+
+/* Pulse animation for loading states */
+@keyframes executePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.execution-loading {
+  animation: executePulse 1.5s ease-in-out infinite;
+}
+
+/* Run button glow effect */
+.run-button-glow {
+  box-shadow: 0 0 12px rgba(20, 184, 166, 0.3);
+}
+
+.run-button-glow:hover {
+  box-shadow: 0 0 20px rgba(20, 184, 166, 0.5);
+}
