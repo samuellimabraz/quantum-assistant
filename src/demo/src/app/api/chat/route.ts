@@ -17,11 +17,11 @@ function isConnectionError(error: unknown): boolean {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     const cause = (error as Error & { cause?: Error })?.cause;
-    
+
     if (message.includes('fetch failed') || message.includes('econnrefused')) {
       return true;
     }
-    
+
     if (cause && 'code' in cause && cause.code === 'ECONNREFUSED') {
       return true;
     }
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
 
     if (stream) {
       const encoder = new TextEncoder();
-      
+
       const readableStream = new ReadableStream({
         async start(controller) {
           try {
@@ -66,10 +66,10 @@ export async function POST(request: NextRequest) {
           } catch (error) {
             console.error('Stream error:', error);
             const isConnection = isConnectionError(error);
-            const errorMessage = isConnection 
+            const errorMessage = isConnection
               ? createErrorMessage(true)
               : (error instanceof Error ? error.message : 'Stream error occurred');
-            
+
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ error: errorMessage, done: true })}\n\n`)
             );

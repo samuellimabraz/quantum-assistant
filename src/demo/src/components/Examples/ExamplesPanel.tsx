@@ -190,8 +190,8 @@ export function ExamplesPanel({ onSelectExample }: ExamplesPanelProps) {
                       {mode === 'all'
                         ? 'All'
                         : mode === 'multimodal'
-                        ? 'MM'
-                        : 'Text'}
+                          ? 'MM'
+                          : 'Text'}
                     </button>
                   )
                 )}

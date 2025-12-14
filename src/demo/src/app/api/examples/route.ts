@@ -5,7 +5,7 @@ import type { TaskType, Category } from '@/types';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    
+
     const split = (searchParams.get('split') as 'train' | 'validation' | 'test') || 'test';
     const limit = parseInt(searchParams.get('limit') || '50', 10);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     if (hasImage !== null) filters.hasImage = hasImage === 'true';
 
     let examples;
-    
+
     if (Object.keys(filters).length > 0) {
       examples = await datasetLoader.loadFilteredExamples(filters, split, limit + offset);
       examples = examples.slice(offset, offset + limit);
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Examples API error:', error);
-    
+
     const errorMessage =
       error instanceof Error ? error.message : 'Failed to load examples';
 

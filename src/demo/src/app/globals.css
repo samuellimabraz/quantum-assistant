@@ -50,6 +50,7 @@
       opacity: 0;
       transform: translateY(10px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -61,15 +62,27 @@
     animation: typing 1.4s infinite ease-in-out both;
   }
 
-  .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-  .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-  .typing-indicator span:nth-child(3) { animation-delay: 0s; }
+  .typing-indicator span:nth-child(1) {
+    animation-delay: -0.32s;
+  }
+
+  .typing-indicator span:nth-child(2) {
+    animation-delay: -0.16s;
+  }
+
+  .typing-indicator span:nth-child(3) {
+    animation-delay: 0s;
+  }
 
   @keyframes typing {
-    0%, 80%, 100% {
+
+    0%,
+    80%,
+    100% {
       transform: scale(0.8);
       opacity: 0.5;
     }
+
     40% {
       transform: scale(1);
       opacity: 1;
@@ -87,7 +100,7 @@
   text-shadow: none !important;
 }
 
-.code-block-wrapper pre > div {
+.code-block-wrapper pre>div {
   background: #18181b !important;
 }
 
@@ -114,9 +127,17 @@
   @apply font-semibold text-zinc-100 mt-6 mb-3;
 }
 
-.markdown-content h1 { @apply text-2xl; }
-.markdown-content h2 { @apply text-xl; }
-.markdown-content h3 { @apply text-lg; }
+.markdown-content h1 {
+  @apply text-2xl;
+}
+
+.markdown-content h2 {
+  @apply text-xl;
+}
+
+.markdown-content h3 {
+  @apply text-lg;
+}
 
 .markdown-content p {
   @apply mb-4 text-zinc-300;
@@ -127,8 +148,13 @@
   @apply mb-4 pl-6 text-zinc-300;
 }
 
-.markdown-content ul { @apply list-disc; }
-.markdown-content ol { @apply list-decimal; }
+.markdown-content ul {
+  @apply list-disc;
+}
+
+.markdown-content ol {
+  @apply list-decimal;
+}
 
 .markdown-content li {
   @apply mb-1;
@@ -177,7 +203,7 @@
   @apply my-4 overflow-x-auto overflow-y-hidden py-2;
 }
 
-.markdown-content .katex-display > .katex {
+.markdown-content .katex-display>.katex {
   @apply text-zinc-100;
 }
 
@@ -203,23 +229,28 @@
 }
 
 .katex .mathnormal {
-  color: #93c5fd; /* blue-300 for variables */
+  color: #93c5fd;
+  /* blue-300 for variables */
 }
 
 .katex .text {
-  color: #d4d4d8; /* zinc-300 */
+  color: #d4d4d8;
+  /* zinc-300 */
 }
 
 .katex .mop {
-  color: #c4b5fd; /* violet-300 for operators like sum, integral */
+  color: #c4b5fd;
+  /* violet-300 for operators like sum, integral */
 }
 
-.katex .sqrt > .root {
-  color: #86efac; /* emerald-300 */
+.katex .sqrt>.root {
+  color: #86efac;
+  /* emerald-300 */
 }
 
 .katex-html {
-  color: #e4e4e7; /* zinc-200 */
+  color: #e4e4e7;
+  /* zinc-200 */
 }
 
 /* Execution result styling */
@@ -239,8 +270,15 @@
 
 /* Pulse animation for loading states */
 @keyframes executePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .execution-loading {

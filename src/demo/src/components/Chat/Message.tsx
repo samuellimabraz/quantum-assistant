@@ -89,7 +89,7 @@ const customTheme: { [key: string]: React.CSSProperties } = {
 
 function isPythonCode(language: string, code: string): boolean {
   if (language === 'python') return true;
-  
+
   const pythonPatterns = [
     /^from\s+\w+\s+import/m,
     /^import\s+\w+/m,
@@ -98,7 +98,7 @@ function isPythonCode(language: string, code: string): boolean {
     /QuantumCircuit/,
     /qiskit/i,
   ];
-  
+
   return pythonPatterns.some(p => p.test(code));
 }
 
@@ -124,17 +124,17 @@ function CodeBlock({
 
   const handleExecute = useCallback(async () => {
     if (isExecuting) return;
-    
+
     setIsExecuting(true);
     setExecutionResult(null);
-    
+
     try {
       const response = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, timeout: 30 }),
       });
-      
+
       const result = await response.json();
       setExecutionResult(result);
     } catch (error) {
@@ -149,7 +149,7 @@ function CodeBlock({
       setIsExecuting(false);
     }
   }, [code, isExecuting]);
-  
+
   const handleStopExecution = () => {
     // Note: In a real implementation, you'd need to track and abort the request
     setIsExecuting(false);
@@ -165,7 +165,7 @@ function CodeBlock({
         <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded">
           {detectedLanguage || 'code'}
         </span>
-        
+
         {canExecute && (
           <button
             onClick={isExecuting ? handleStopExecution : handleExecute}
@@ -191,7 +191,7 @@ function CodeBlock({
             )}
           </button>
         )}
-        
+
         <button
           onClick={handleCopy}
           className="p-1.5 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors"
@@ -204,7 +204,7 @@ function CodeBlock({
           )}
         </button>
       </div>
-      
+
       <SyntaxHighlighter
         style={customTheme}
         language={detectedLanguage || 'python'}
@@ -228,10 +228,10 @@ function CodeBlock({
       >
         {code}
       </SyntaxHighlighter>
-      
+
       {/* Execution result */}
       {(isExecuting || executionResult) && (
-        <ExecutionResult 
+        <ExecutionResult
           result={executionResult || { success: false, output: '', error: '', executionTime: 0 }}
           isLoading={isExecuting}
         />

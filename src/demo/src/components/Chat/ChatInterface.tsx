@@ -80,7 +80,7 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
 
     try {
       let imageData: string | undefined;
-      
+
       if (imageBase64) {
         try {
           imageData = await resizeImageForInference(`data:image/jpeg;base64,${imageBase64}`);
@@ -98,9 +98,9 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
 
       const userContent = imageData
         ? [
-            { type: 'text', text: content },
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageData}` } },
-          ]
+          { type: 'text', text: content },
+          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageData}` } },
+        ]
         : content;
 
       const response = await fetch('/api/chat', {
@@ -155,11 +155,11 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
           const jsonStr = trimmed.slice(6);
           try {
             const data = JSON.parse(jsonStr);
-            
+
             if (data.error) {
               throw new Error(data.error);
             }
-            
+
             if (data.content) {
               fullContent += data.content;
               const processedContent = postProcessResponse(fullContent);
@@ -190,15 +190,15 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
       if ((error as Error).name === 'AbortError') {
         return;
       }
-      
+
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
             ? {
-                ...m,
-                content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
-                isLoading: false,
-              }
+              ...m,
+              content: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
+              isLoading: false,
+            }
             : m
         )
       );
