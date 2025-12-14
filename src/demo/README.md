@@ -11,6 +11,14 @@ Interactive web interface for the Quantum Assistant - a multimodal Vision-Langua
 - **Interactive Chat**: Ask questions about quantum computing, generate Qiskit code
 - **Multimodal Support**: Upload circuit diagrams, Bloch spheres, or histograms for analysis
 - **Code Execution**: Run generated Qiskit/Python code directly in the browser with sandboxed execution
+- **Practice Mode**: Solve coding problems from the full dataset with:
+  - **800+ coding problems** from test and validation splits
+  - **Split selector**: Switch between test (1290 total) and validation (1239 total) datasets
+  - **Pagination**: Navigate through problems with 25 items per page
+  - **Search**: Find specific problems by keyword
+  - **Filters**: Filter by task type (Function Completion, Code Generation), category, and multimodal (with/without images)
+  - **AI Helper**: Get hints and guidance while solving problems
+  - **Progress tracking**: Mark solved problems with local storage persistence
 - **Dataset Examples**: Browse and test with samples from the Quantum Assistant test set
 - **Code Highlighting**: Syntax-highlighted code blocks with copy functionality
 - **Responsive Design**: Works on desktop and mobile devices
@@ -27,7 +35,10 @@ Interactive web interface for the Quantum Assistant - a multimodal Vision-Langua
 
 ```bash
 cd src/demo
+
 npm install
+uv venv
+uv pip install -r pyproject.toml
 ```
 
 ### Configuration
@@ -43,8 +54,10 @@ DEMO_MAX_TOKENS=4096
 DEMO_TEMPERATURE=0.1
 DEMO_TIMEOUT=120
 
-# Optional: HuggingFace token for private datasets
 HF_TOKEN=hf_...
+
+# Python environment for code execution (Practice mode)
+PYTHON_PATH=/path/to/quantum-assistant/.venv/bin/python
 ```
 
 ### Development
@@ -81,6 +94,12 @@ src/demo/
 │   │   │   ├── ChatInterface.tsx   # Main chat component
 │   │   │   ├── Message.tsx         # Message with code execution
 │   │   │   └── ExecutionResult.tsx # Code execution output display
+│   │   ├── Practice/               # Practice mode components
+│   │   │   ├── PracticeInterface.tsx # Main practice layout
+│   │   │   ├── ProblemList.tsx     # Problem list with pagination/search
+│   │   │   ├── CodeEditor.tsx      # Monaco code editor
+│   │   │   ├── TestRunner.tsx      # Unit test execution
+│   │   │   └── AIHelper.tsx        # AI assistance sidebar
 │   │   └── Examples/               # Dataset examples panel
 │   ├── lib/
 │   │   ├── api/vlm-client.ts       # VLM API client
@@ -114,11 +133,30 @@ Fetch examples from the Quantum Assistant dataset.
 
 Query parameters:
 - `split`: train | validation | test (default: test)
-- `limit`: number of examples (default: 50)
+- `limit`: number of examples (default: 50, max: 100)
 - `offset`: pagination offset (default: 0)
 - `type`: function_completion | code_generation | qa
 - `category`: circuits_and_gates | quantum_info_and_operators | ...
 - `hasImage`: true | false
+- `codingOnly`: true | false - filter for problems with test code and entry points
+- `search`: text search in question and answer
+
+### POST /api/examples
+
+Get dataset metadata.
+
+```json
+{
+  "action": "getSplitInfo"  // Returns counts for each split
+}
+```
+
+```json
+{
+  "action": "getCodingCount",
+  "split": "test"  // Returns count of coding problems in split
+}
+```
 
 ### POST /api/execute
 

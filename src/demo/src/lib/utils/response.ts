@@ -14,11 +14,14 @@ export function extractCodeFromResponse(response: string, entryPoint?: string): 
   let match;
 
   while ((match = codeBlockRegex.exec(response)) !== null) {
-    matches.push(match[1].trim());
+    // Preserve indentation - only trim trailing whitespace, not leading
+    matches.push(match[1].replace(/\s+$/, ''));
   }
 
   if (matches.length === 0) {
-    return response.trim();
+    // No code blocks found - the response itself might be code
+    // Preserve indentation by only trimming trailing whitespace
+    return response.replace(/\s+$/, '');
   }
 
   if (matches.length === 1) {

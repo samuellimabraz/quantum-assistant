@@ -22,6 +22,11 @@ export interface DatasetExample {
   source: string;
 }
 
+export interface CodingProblem extends DatasetExample {
+  testCode: string;
+  entryPoint: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -67,3 +72,23 @@ export interface ExecuteResponse {
   hasCircuitOutput?: boolean;
 }
 
+export interface TestResult {
+  passed: boolean;
+  total: number;
+  failed: number;
+  details: TestCaseResult[];
+  executionTime: number;
+  error?: string;
+  traceback?: string;
+  output?: string;
+}
+
+export interface TestCaseResult {
+  name: string;
+  passed: boolean;
+  expected?: string;
+  actual?: string;
+  error?: string;
+}
+
+export type AppMode = 'chat' | 'practice';

@@ -293,3 +293,98 @@
 .run-button-glow:hover {
   box-shadow: 0 0 20px rgba(20, 184, 166, 0.5);
 }
+
+/* Practice mode styles */
+.practice-layout {
+  @apply flex h-full;
+}
+
+/* Monaco editor container */
+.monaco-container {
+  @apply h-full w-full;
+}
+
+.monaco-container .monaco-editor {
+  @apply rounded-none;
+}
+
+/* Problem panel transition */
+.problem-panel-transition {
+  transition: width 200ms ease-out;
+}
+
+/* Drag handle indicator */
+.drag-handle-active {
+  @apply bg-teal-500/70;
+}
+
+/* Test result animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.test-result-animate {
+  animation: slideIn 0.2s ease-out forwards;
+}
+
+/* AI Helper chat bubble */
+.ai-bubble {
+  @apply relative;
+}
+
+.ai-bubble::before {
+  content: '';
+  @apply absolute w-2 h-2 bg-zinc-800/80 rotate-45;
+  left: -4px;
+  top: 12px;
+}
+
+/* Code completion success glow */
+.success-glow {
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.3);
+}
+
+/* Scrollbar customization for panels */
+.panel-scrollbar::-webkit-scrollbar {
+  @apply w-1.5;
+}
+
+.panel-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.panel-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700/50 rounded-full;
+}
+
+.panel-scrollbar::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-600/50;
+}
+
+/* Mode toggle active state */
+.mode-toggle-active {
+  @apply bg-teal-600 text-white shadow-sm;
+}
+
+/* Problem card hover effect */
+.problem-card-hover {
+  @apply hover:border-teal-700/40 hover:bg-zinc-800/80;
+}
+
+/* Solved problem indicator */
+.solved-indicator {
+  @apply text-emerald-500;
+}
+
+/* Resize cursor override */
+.resizing-active * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}

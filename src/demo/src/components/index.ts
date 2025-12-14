@@ -8,4 +8,5 @@ export { ExecutionResult } from './Chat/ExecutionResult';
 export type { ExecutionResultData } from './Chat/ExecutionResult';
 export { ExamplesPanel } from './Examples/ExamplesPanel';
 export { ExampleCard } from './Examples/ExampleCard';
-
+export { ResizablePanel, useResizableWidth } from './ResizablePanel/ResizablePanel';
+export { PracticeInterface, CodeEditor, ProblemList, TestRunner, AIHelper } from './Practice';

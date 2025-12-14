@@ -26,12 +26,14 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 1000 app
 WORKDIR /app
 
-RUN pip install --no-cache-dir \
-    qiskit>=1.0.0 \
-    qiskit-aer>=0.14.0 \
-    numpy>=1.24.0 \
-    matplotlib>=3.7.0 \
-    && pip cache purge
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY pyproject.toml ./
+
+RUN uv venv .venv && \
+    . .venv/bin/activate && \
+    uv pip install -e . && \
+    rm -rf /root/.cache/uv
 
 COPY --from=builder --chown=app:app /app/.next/standalone ./
 COPY --from=builder --chown=app:app /app/.next/static ./.next/static
@@ -45,6 +47,7 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=7860
 ENV HOSTNAME=0.0.0.0
+ENV PYTHON_PATH=/app/.venv/bin/python
 
 EXPOSE 7860
 

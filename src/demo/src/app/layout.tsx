@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { PROJECT_CONFIG } from '@/config/constants';
+import { DatasetProvider } from '@/lib/dataset/DatasetProvider';
 import 'katex/dist/katex.min.css';
 import './globals.css';
 
@@ -24,7 +25,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="min-h-screen bg-zinc-950">
-        <div className="relative z-10">{children}</div>
+        <DatasetProvider initialSplits={['test', 'validation']}>
+          <div className="relative z-10">{children}</div>
+        </DatasetProvider>
       </body>
     </html>
   );

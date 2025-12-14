@@ -117,7 +117,11 @@ async function executeCode(code: string, timeout: number): Promise<ExecutionResu
             let stderr = '';
             let killed = false;
 
-            const pythonProcess = spawn('python3', [tempFile], {
+            // Use the PYTHON_PATH environment variable if set, otherwise default to python3
+            // This allows configuring the Python environment with quantum dependencies
+            const pythonPath = process.env.PYTHON_PATH || 'python3';
+
+            const pythonProcess = spawn(pythonPath, [tempFile], {
                 timeout: timeout * 1000,
                 env: {
                     ...process.env,
