@@ -3,9 +3,15 @@ import { createVLMClient } from '@/lib/api/vlm-client';
 
 export const maxDuration = 120;
 
+interface MessageContent {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  content: string | MessageContent[];
 }
 
 interface ChatRequestBody {
