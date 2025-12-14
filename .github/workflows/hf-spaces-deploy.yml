@@ -55,7 +55,7 @@ jobs:
                   cat > /tmp/hf-space/README.md << 'EOF'
                   ---
                   title: Quantum Assistant
-                  emoji: ⚛️
+                  emoji: ♾️
                   colorFrom: indigo
                   colorTo: purple
                   sdk: docker
@@ -107,11 +107,16 @@ jobs:
                   cd /tmp/hf-space
 
                   # Initialize git repo
-                  git init
+                  git init -b main
                   git remote add space https://huggingface.co/spaces/${{ env.HF_SPACE }}
 
                   # Configure git for HF
                   git config http.postBuffer 524288000
+
+                  # Setup Git LFS for binary files (required by HuggingFace)
+                  git lfs install
+                  git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.ico" "*.svg"
+                  git add .gitattributes
 
                   # Add all files
                   git add -A
