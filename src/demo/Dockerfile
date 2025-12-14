@@ -16,6 +16,8 @@ FROM python:3.11-slim AS runner
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
+    git \
+    git-lfs \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && apt-get clean \
