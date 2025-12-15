@@ -21,6 +21,7 @@ interface TestRunnerProps {
   testCode: string;
   entryPoint: string;
   onTestComplete: (result: TestResult) => void;
+  initialResult?: TestResult | null;
 }
 
 export function TestRunner({
@@ -28,9 +29,10 @@ export function TestRunner({
   testCode,
   entryPoint,
   onTestComplete,
+  initialResult = null,
 }: TestRunnerProps) {
   const [isRunning, setIsRunning] = useState(false);
-  const [result, setResult] = useState<TestResult | null>(null);
+  const [result, setResult] = useState<TestResult | null>(initialResult);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showTraceback, setShowTraceback] = useState(false);
 
@@ -78,6 +80,8 @@ export function TestRunner({
   };
 
   const hasDetails = result && (result.error || result.details.length > 0 || result.traceback || result.output);
+  const passedCount = result?.details?.filter(t => t.passed).length ?? 0;
+  const totalCount = result?.total ?? result?.details?.length ?? 0;
 
   return (
     <div className="flex flex-col">
@@ -112,12 +116,22 @@ export function TestRunner({
               {result.passed ? (
                 <span className="flex items-center gap-1.5 text-emerald-400">
                   <CheckCircle2 className="w-4 h-4" />
-                  Passed
+                  <span>Passed</span>
+                  {totalCount > 0 && (
+                    <span className="text-emerald-400/70 text-xs font-normal">
+                      ({passedCount}/{totalCount} tests)
+                    </span>
+                  )}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-red-400">
                   <XCircle className="w-4 h-4" />
-                  Failed
+                  <span>Failed</span>
+                  {totalCount > 0 && (
+                    <span className="text-red-400/70 text-xs font-normal">
+                      ({passedCount}/{totalCount} tests)
+                    </span>
+                  )}
                 </span>
               )}
               <span className="flex items-center gap-1 text-zinc-500 text-xs">
@@ -128,7 +142,7 @@ export function TestRunner({
           )}
         </div>
 
-        {hasDetails && (
+        {result && (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -144,10 +158,22 @@ export function TestRunner({
       </div>
 
       {/* Expandable details section */}
-      {isExpanded && hasDetails && (
+      {isExpanded && result && (
         <div className="px-4 py-3 bg-zinc-900/30 border-t border-zinc-800/50 max-h-64 overflow-y-auto">
+          {/* Summary for passed tests */}
+          {result.passed && !result.error && (
+            <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-800/30 mb-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm text-emerald-300 font-medium">
+                  All {totalCount} test{totalCount !== 1 ? 's' : ''} passed successfully!
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Main error message */}
-          {result?.error && (
+          {result.error && (
             <div className="p-3 rounded-lg bg-red-950/30 border border-red-800/40 mb-3">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
@@ -159,7 +185,7 @@ export function TestRunner({
           )}
 
           {/* Traceback toggle and display */}
-          {result?.traceback && result.traceback !== result.error && (
+          {result.traceback && result.traceback !== result.error && (
             <div className="mb-3">
               <button
                 onClick={() => setShowTraceback(!showTraceback)}
@@ -184,7 +210,7 @@ export function TestRunner({
           )}
 
           {/* Output display */}
-          {result?.output && (
+          {result.output && (
             <div className="mb-3">
               <div className="flex items-center gap-2 text-xs text-zinc-500 mb-1.5">
                 <Terminal className="w-3.5 h-3.5" />
@@ -198,9 +224,10 @@ export function TestRunner({
             </div>
           )}
 
-          {/* Test details */}
-          {result?.details && result.details.length > 0 && (
+          {/* Test details - always show */}
+          {result.details && result.details.length > 0 && (
             <div className="space-y-2">
+              <div className="text-xs text-zinc-500 mb-2">Test Results:</div>
               {result.details.map((test, idx) => (
                 <div
                   key={idx}
@@ -241,7 +268,7 @@ export function TestRunner({
                           <span className="text-red-300">{test.actual}</span>
                         </p>
                       )}
-                      {test.error && !result?.error && (
+                      {test.error && !result.error && (
                         <p className="text-red-300/80">{test.error}</p>
                       )}
                     </div>

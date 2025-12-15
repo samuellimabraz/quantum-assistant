@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createVLMClient } from '@/lib/api/vlm-client';
+import { ALLOWED_TOPICS, BLOCKED_INPUT_PATTERNS } from '@/config/constants';
 
 export const maxDuration = 120;
 
@@ -17,6 +18,100 @@ interface ChatMessage {
 interface ChatRequestBody {
   messages: ChatMessage[];
   stream?: boolean;
+}
+
+interface ContentValidation {
+  valid: boolean;
+  reason?: string;
+  isOffTopic?: boolean;
+}
+
+/**
+ * Extract text content from a message for validation
+ */
+function extractTextContent(content: string | MessageContent[]): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  return content
+    .filter((c): c is MessageContent & { type: 'text'; text: string } => c.type === 'text' && !!c.text)
+    .map(c => c.text)
+    .join(' ');
+}
+
+/**
+ * Validate user input for malicious patterns and topic relevance
+ */
+function validateUserInput(text: string): ContentValidation {
+  const lowerText = text.toLowerCase();
+  
+  // Check for blocked patterns (prompt injection, harmful content, etc.)
+  for (const pattern of BLOCKED_INPUT_PATTERNS) {
+    if (pattern.test(text)) {
+      return {
+        valid: false,
+        reason: "I can't process this request. Please ask a question related to quantum computing, Qiskit, physics, or mathematics.",
+      };
+    }
+  }
+  
+  // Check message length (prevent abuse)
+  if (text.length > 10000) {
+    return {
+      valid: false,
+      reason: 'Message too long. Please keep your question under 10,000 characters.',
+    };
+  }
+  
+  // Check if the message contains any relevant topic keywords
+  // Images are always allowed (circuit diagrams, Bloch spheres, etc.)
+  const hasImage = text.includes('[IMAGE]') || text.length < 20; // Short messages might be follow-ups
+  
+  if (!hasImage) {
+    const words = lowerText.split(/\s+/);
+    const hasRelevantTopic = ALLOWED_TOPICS.some(topic => {
+      // Check for whole word or part of compound word
+      return words.some(word => 
+        word.includes(topic.toLowerCase()) || 
+        topic.toLowerCase().includes(word)
+      );
+    });
+    
+    // Also check for common question patterns
+    const isQuestion = /^(what|how|why|when|where|can|could|would|should|is|are|do|does|explain|describe|help|show|create|implement|write|generate|build|make)/i.test(lowerText.trim());
+    const hasCodeContext = /```|def\s|import\s|class\s|function|circuit/i.test(text);
+    
+    // Be permissive: if it's a question or has code context, allow it
+    // The model will redirect off-topic questions anyway
+    if (!hasRelevantTopic && !isQuestion && !hasCodeContext && text.length > 50) {
+      return {
+        valid: true, // Still valid, but flag as potentially off-topic
+        isOffTopic: true,
+      };
+    }
+  }
+  
+  return { valid: true };
+}
+
+/**
+ * Create off-topic response message
+ */
+function createOffTopicResponse(): string {
+  return `I'm **Quantum Assistant**, specialized in quantum computing, Qiskit, physics, and related mathematics.
+
+I can help you with:
+- 🔬 **Quantum Computing**: Circuits, gates, algorithms, error correction
+- 💻 **Qiskit**: Code generation, debugging, best practices
+- 📐 **Physics & Math**: Quantum mechanics, linear algebra, probability
+- 🤖 **Quantum ML**: Variational algorithms, optimization, hybrid systems
+
+**Please ask a question related to these topics!**
+
+For example:
+- "How do I create a Bell state in Qiskit?"
+- "Explain the Grover's algorithm"
+- "What is quantum entanglement?"`;
 }
 
 function isConnectionError(error: unknown): boolean {
@@ -53,6 +148,44 @@ export async function POST(request: NextRequest) {
         JSON.stringify({ error: 'Invalid request: messages array required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Find the last user message for validation
+    const userMessages = messages.filter(m => m.role === 'user');
+    const lastUserMessage = userMessages[userMessages.length - 1];
+    
+    if (lastUserMessage) {
+      const userText = extractTextContent(lastUserMessage.content);
+      const validation = validateUserInput(userText);
+      
+      // If input is invalid (malicious/harmful), return error
+      if (!validation.valid && validation.reason) {
+        const encoder = new TextEncoder();
+        
+        if (stream) {
+          const errorStream = new ReadableStream({
+            start(controller) {
+              const data = JSON.stringify({ content: validation.reason, done: false });
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+              controller.close();
+            },
+          });
+          
+          return new Response(errorStream, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            },
+          });
+        } else {
+          return new Response(
+            JSON.stringify({ content: validation.reason }),
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+      }
     }
 
     const client = createVLMClient();

@@ -237,15 +237,22 @@ export function AIHelper({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll only within the messages container, not the whole page
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   }, []);
 
   useEffect(() => {
-    scrollToBottom();
+    // Only scroll within the AI Helper panel, not the whole page
+    requestAnimationFrame(() => {
+      scrollToBottom();
+    });
   }, [messages, scrollToBottom]);
 
   useEffect(() => {
@@ -522,7 +529,7 @@ export function AIHelper({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <Sparkles className="w-8 h-8 text-teal-500/50 mb-3" />
@@ -633,7 +640,6 @@ export function AIHelper({
             );
           })
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {problem && (

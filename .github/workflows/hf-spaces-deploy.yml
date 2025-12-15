@@ -39,7 +39,7 @@ jobs:
 
       - name: Prepare Space files
         run: |
-          # Create a temporary directory for the Space
+
           mkdir -p /tmp/hf-space
 
           cp -r src/demo/* /tmp/hf-space/
@@ -49,7 +49,6 @@ jobs:
           rm -f /tmp/hf-space/.env.local
           rm -f /tmp/hf-space/.env
 
-          # Create HuggingFace Space README with YAML frontmatter
           cat > /tmp/hf-space/README.md << 'EOF'
           ---
           title: Quantum Assistant
@@ -66,8 +65,6 @@ jobs:
           models:
             - samuellimabraz/Qwen3-VL-8B-rslora-r32-2
           ---
-
-          # Quantum Assistant Demo
 
           Interactive demo for **Quantum Assistant** - A Multimodal Vision Language Model specialized for Quantum Computing with Qiskit.
 
@@ -99,7 +96,6 @@ jobs:
           Final Graduation Project - 2025
           EOF
 
-          # Fix README indentation (remove leading spaces from heredoc)
           sed -i 's/^          //' /tmp/hf-space/README.md
 
       - name: Push to HuggingFace Spaces
@@ -108,23 +104,15 @@ jobs:
         run: |
           cd /tmp/hf-space
 
-          # Initialize git repo
           git init -b main
           git remote add space https://huggingface.co/spaces/${{ env.HF_SPACE }}
 
-          # Configure git for HF
           git config http.postBuffer 524288000
-
-          # Setup Git LFS for binary files (required by HuggingFace)
           git lfs install
           git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.ico" "*.svg"
           git add .gitattributes
 
-          # Add all files
           git add -A
-
-          # Commit
           git commit -m "Deploy demo from GitHub Actions - $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
 
-          # Force push to HuggingFace Spaces
           git push --force https://user:${HF_TOKEN}@huggingface.co/spaces/${{ env.HF_SPACE }} HEAD:main

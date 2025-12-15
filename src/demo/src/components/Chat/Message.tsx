@@ -6,7 +6,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { InlineMath, BlockMath } from 'react-katex';
-import { Copy, Check, Play, Square } from 'lucide-react';
+import { Copy, Check, Play, Square, Edit2, X } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 import { clsx } from 'clsx';
 import { QubitIcon } from './QubitIcon';
 import { ExecutionResult, ExecutionResultData } from './ExecutionResult';
@@ -104,7 +105,7 @@ function isPythonCode(language: string, code: string): boolean {
 
 function CodeBlock({
   language,
-  code,
+  code: initialCode,
   onCopy,
 }: {
   language: string;
@@ -113,7 +114,12 @@ function CodeBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedCode, setEditedCode] = useState(initialCode);
   const [executionResult, setExecutionResult] = useState<ExecutionResultData | null>(null);
+
+  // The code to use (edited or original)
+  const code = isEditing ? editedCode : initialCode;
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(code);
@@ -151,12 +157,31 @@ function CodeBlock({
   }, [code, isExecuting]);
 
   const handleStopExecution = () => {
-    // Note: In a real implementation, you'd need to track and abort the request
     setIsExecuting(false);
+  };
+
+  const handleToggleEdit = () => {
+    if (isEditing) {
+      // Exiting edit mode - keep the edited code
+      setIsEditing(false);
+    } else {
+      // Entering edit mode
+      setEditedCode(initialCode);
+      setIsEditing(true);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditedCode(initialCode);
+    setIsEditing(false);
   };
 
   const detectedLanguage = language || detectLanguage(code);
   const canExecute = isPythonCode(detectedLanguage, code);
+  
+  // Calculate editor height based on line count
+  const lineCount = code.split('\n').length;
+  const editorHeight = Math.min(Math.max(lineCount * 20 + 32, 100), 400);
 
   return (
     <div className="relative group my-3 code-block-wrapper">
@@ -165,6 +190,30 @@ function CodeBlock({
         <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded">
           {detectedLanguage || 'code'}
         </span>
+
+        {/* Edit toggle */}
+        <button
+          onClick={isEditing ? handleCancelEdit : handleToggleEdit}
+          className={clsx(
+            'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-all',
+            isEditing
+              ? 'bg-amber-600/20 text-amber-400 hover:bg-amber-600/30'
+              : 'bg-zinc-700/50 text-zinc-400 hover:bg-zinc-700'
+          )}
+          title={isEditing ? 'Cancel editing' : 'Edit code'}
+        >
+          {isEditing ? (
+            <>
+              <X className="w-3 h-3" />
+              <span>Cancel</span>
+            </>
+          ) : (
+            <>
+              <Edit2 className="w-3 h-3" />
+              <span>Edit</span>
+            </>
+          )}
+        </button>
 
         {canExecute && (
           <button
@@ -205,29 +254,63 @@ function CodeBlock({
         </button>
       </div>
 
-      <SyntaxHighlighter
-        style={customTheme}
-        language={detectedLanguage || 'python'}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          borderRadius: '0.5rem',
-          background: '#18181b',
-          padding: '1rem',
-          fontSize: '0.875rem',
-          border: '1px solid #27272a',
-          lineHeight: '1.6',
-        }}
-        codeTagProps={{
-          style: {
-            background: 'none',
-            padding: 0,
-          },
-        }}
-        wrapLongLines={false}
-      >
-        {code}
-      </SyntaxHighlighter>
+      {isEditing ? (
+        // Monaco Editor for editing
+        <div 
+          className="rounded-lg overflow-hidden border border-amber-600/30"
+          style={{ height: editorHeight }}
+        >
+          <Editor
+            height="100%"
+            language={detectedLanguage || 'python'}
+            value={editedCode}
+            onChange={(value) => setEditedCode(value || '')}
+            theme="vs-dark"
+            options={{
+              fontSize: 14,
+              fontFamily: "'JetBrains Mono', Consolas, Monaco, monospace",
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              lineNumbers: 'on',
+              glyphMargin: false,
+              folding: false,
+              lineDecorationsWidth: 8,
+              lineNumbersMinChars: 3,
+              padding: { top: 12, bottom: 12 },
+              renderLineHighlight: 'line',
+              tabSize: 4,
+              insertSpaces: true,
+              wordWrap: 'on',
+              automaticLayout: true,
+            }}
+          />
+        </div>
+      ) : (
+        // Static code display
+        <SyntaxHighlighter
+          style={customTheme}
+          language={detectedLanguage || 'python'}
+          PreTag="div"
+          customStyle={{
+            margin: 0,
+            borderRadius: '0.5rem',
+            background: '#18181b',
+            padding: '1rem',
+            fontSize: '0.875rem',
+            border: '1px solid #27272a',
+            lineHeight: '1.6',
+          }}
+          codeTagProps={{
+            style: {
+              background: 'none',
+              padding: 0,
+            },
+          }}
+          wrapLongLines={false}
+        >
+          {code}
+        </SyntaxHighlighter>
+      )}
 
       {/* Execution result */}
       {(isExecuting || executionResult) && (

@@ -26,7 +26,7 @@ export function CodeEditor({
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
-    editor.focus();
+    // Don't auto-focus to prevent unwanted page scroll when selecting problems
   }, []);
 
   const handleChange: OnChange = useCallback((val) => {

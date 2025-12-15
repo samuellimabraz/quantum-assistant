@@ -15,9 +15,20 @@ interface PracticeInterfaceProps {
   className?: string;
 }
 
+// State saved per problem
+interface ProblemState {
+  code: string;
+  testResult: TestResult | null;
+}
+
 export function PracticeInterface({ className }: PracticeInterfaceProps) {
   const [selectedProblem, setSelectedProblem] = useState<CodingProblem | null>(null);
   const [userCode, setUserCode] = useState('');
+  const [currentTestResult, setCurrentTestResult] = useState<TestResult | null>(null);
+
+  // Store state per problem (code and test results)
+  const [problemStates, setProblemStates] = useState<Map<string, ProblemState>>(new Map());
+
   const [solvedProblems, setSolvedProblems] = useState<Set<string>>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('solvedProblems');
@@ -42,6 +53,21 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
       localStorage.setItem('solvedProblems', JSON.stringify([...solvedProblems]));
     }
   }, [solvedProblems]);
+
+  // Save current problem state when code changes
+  useEffect(() => {
+    if (selectedProblem && userCode) {
+      setProblemStates(prev => {
+        const newStates = new Map(prev);
+        const existing = newStates.get(selectedProblem.id);
+        newStates.set(selectedProblem.id, {
+          code: userCode,
+          testResult: existing?.testResult ?? currentTestResult,
+        });
+        return newStates;
+      });
+    }
+  }, [selectedProblem, userCode]);
 
   // Extract code from question for function_completion problems
   const extractCodeFromQuestion = useCallback((question: string): { description: string; code: string | null } => {
@@ -69,30 +95,30 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
   const getFunctionSignature = useCallback((question: string): string | null => {
     const { code } = extractCodeFromQuestion(question);
     if (!code) return null;
-    
+
     const lines = code.split('\n');
     const signatureLines: string[] = [];
     let foundDef = false;
     let inDocstring = false;
     let docstringChar = '';
     let docstringComplete = false;
-    
+
     for (const line of lines) {
       const trimmed = line.trim();
-      
+
       // Check if this is the def line
       if (!foundDef && trimmed.startsWith('def ')) {
         foundDef = true;
         signatureLines.push(line);
         continue;
       }
-      
+
       // If we haven't found def yet, this is an import or other preamble - include it
       if (!foundDef) {
         signatureLines.push(line);
         continue;
       }
-      
+
       // After def line, check for docstring
       if (!inDocstring && !docstringComplete && (line.includes('"""') || line.includes("'''"))) {
         signatureLines.push(line);
@@ -107,7 +133,7 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
         inDocstring = true;
         continue;
       }
-      
+
       // Check for docstring end (multi-line docstring)
       if (inDocstring && line.includes(docstringChar)) {
         signatureLines.push(line);
@@ -115,13 +141,13 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
         docstringComplete = true;
         continue;
       }
-      
+
       // Still inside multi-line docstring
       if (inDocstring) {
         signatureLines.push(line);
         continue;
       }
-      
+
       // After docstring is complete, stop at 'pass' or any actual code
       if (docstringComplete || foundDef) {
         if (trimmed === 'pass' || trimmed === '' || trimmed.startsWith('#')) {
@@ -132,31 +158,56 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
         break;
       }
     }
-    
+
     return signatureLines.join('\n');
   }, [extractCodeFromQuestion]);
 
   const handleSelectProblem = useCallback((problem: CodingProblem) => {
-    setSelectedProblem(problem);
-    
-    // Set initial code template based on problem type
-    if (problem.type === 'function_completion') {
-      const { code } = extractCodeFromQuestion(problem.question);
-      if (code) {
-        setUserCode(code + '\n    # Your code here\n    pass');
+    // Check if we have saved state for this problem
+    const savedState = problemStates.get(problem.id);
+
+    if (savedState) {
+      // Restore saved code and test result
+      setUserCode(savedState.code);
+      setCurrentTestResult(savedState.testResult);
+    } else {
+      // Set initial code template based on problem type
+      if (problem.type === 'function_completion') {
+        const { code } = extractCodeFromQuestion(problem.question);
+        if (code) {
+          setUserCode(code + '\n    # Your code here\n    pass');
+        } else {
+          setUserCode('# Write your solution here\n');
+        }
       } else {
         setUserCode('# Write your solution here\n');
       }
-    } else {
-      setUserCode('# Write your solution here\n');
+      // Reset test result for new problem
+      setCurrentTestResult(null);
     }
-  }, [extractCodeFromQuestion]);
+
+    setSelectedProblem(problem);
+  }, [extractCodeFromQuestion, problemStates]);
 
   const handleTestComplete = useCallback((result: TestResult) => {
-    if (result.passed && selectedProblem) {
-      setSolvedProblems((prev) => new Set([...prev, selectedProblem.id]));
+    setCurrentTestResult(result);
+
+    if (selectedProblem) {
+      // Save test result to problem state
+      setProblemStates(prev => {
+        const newStates = new Map(prev);
+        newStates.set(selectedProblem.id, {
+          code: userCode,
+          testResult: result,
+        });
+        return newStates;
+      });
+
+      if (result.passed) {
+        setSolvedProblems((prev) => new Set([...prev, selectedProblem.id]));
+      }
     }
-  }, [selectedProblem]);
+  }, [selectedProblem, userCode]);
 
   const toggleAIHelper = useCallback(() => {
     setIsAIHelperCollapsed(prev => !prev);
@@ -178,7 +229,7 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
       if (signature) {
         // Check if the AI response already includes the full function definition
         const hasFullFunction = extractedCode.match(/^\s*def\s+\w+\s*\(/m);
-        
+
         if (hasFullFunction) {
           // AI returned full function - use it directly
           const normalized = normalizeIndentation(extractedCode, 0);
@@ -314,10 +365,12 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
             {/* Test Runner - at top, compact */}
             <div className="flex-shrink-0 border-b border-zinc-800/80">
               <TestRunner
+                key={selectedProblem.id}
                 userCode={userCode}
                 testCode={selectedProblem.testCode}
                 entryPoint={selectedProblem.entryPoint}
                 onTestComplete={handleTestComplete}
+                initialResult={currentTestResult}
               />
             </div>
 

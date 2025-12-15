@@ -15,11 +15,239 @@ interface TestRequestBody {
   timeout?: number;
 }
 
+// List of dangerous patterns that should be blocked (same as execute route)
+const DANGEROUS_PATTERNS = [
+  // Environment variable access
+  /os\.environ/,
+  /environ\[/,
+  /getenv\s*\(/,
+  // Dangerous modules
+  /\bctypes\b/,
+  /\bpickle\b/,
+  /\bmarshal\b/,
+  /\bshelve\b/,
+  /\bcommands\b/,
+  /\bpty\b/,
+  /\bpexpect\b/,
+  // System/shell access
+  /\bos\.system\b/,
+  /\bos\.popen\b/,
+  /\bos\.spawn/,
+  /\bos\.exec/,
+  /\bos\.fork\b/,
+  /\bsubprocess\b/,
+  /\bcommands\b/,
+  // File system attacks outside sandbox
+  /open\s*\(\s*['"]\s*\/etc/,
+  /open\s*\(\s*['"]\s*\/proc/,
+  /open\s*\(\s*['"]\s*\/sys/,
+  /open\s*\(\s*['"]\s*\/dev/,
+  /open\s*\(\s*['"]\s*\/var/,
+  /open\s*\(\s*['"]\s*\/root/,
+  /open\s*\(\s*['"]\s*\/home/,
+  /open\s*\(\s*['"]\s*\/tmp/,
+  /open\s*\(\s*['"]\s*\.env/,
+  /open\s*\(\s*['"]\s*\.\.\//, // Path traversal
+  /open\s*\(\s*f?['"]\s*\{/,  // f-string with path
+  // Network access
+  /\bsocket\b/,
+  /\burllib\b/,
+  /\brequests\b/,
+  /\bhttpx\b/,
+  /\baiohttp\b/,
+  /\bhttp\.client\b/,
+  /\bftplib\b/,
+  /\bsmtplib\b/,
+  /\btelnetlib\b/,
+  /\bparamiko\b/,
+  // Code execution
+  /\beval\s*\(/,
+  /\bexec\s*\(/,
+  /\bcompile\s*\(/,
+  /\b__import__\b/,
+  /\bimportlib\b/,
+  /\bbuiltins\b/,
+  /\bglobals\s*\(\s*\)/,
+  /\blocals\s*\(\s*\)/,
+  /\bgetattr\s*\([^,]+,\s*['"]/,  // getattr with string
+  /\bsetattr\s*\(/,
+  /\bdelattr\s*\(/,
+  // Class/object manipulation for sandbox escape
+  /\b__class__\b/,
+  /\b__bases__\b/,
+  /\b__subclasses__\b/,
+  /\b__mro__\b/,
+  /\b__globals__\b/,
+  /\b__code__\b/,
+  /\b__reduce__\b/,
+  /\b__getstate__\b/,
+  /\b__setstate__\b/,
+  // Multiprocessing (can be used to bypass restrictions)
+  /\bmultiprocessing\b/,
+  /\bthreading\b/,
+  /\bconcurrent\b/,
+  /\basyncio\.subprocess/,
+];
+
+function validateCode(code: string): { valid: boolean; error?: string } {
+  const codeWithoutComments = code
+    .replace(/#.*$/gm, '')  // Remove single-line comments
+    .replace(/'''[\s\S]*?'''/g, '')  // Remove triple-single-quote strings
+    .replace(/"""[\s\S]*?"""/g, ''); // Remove triple-double-quote strings
+
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (pattern.test(codeWithoutComments)) {
+      return {
+        valid: false,
+        error: `Security error: Potentially dangerous code pattern detected. For security reasons, certain operations are not allowed in the sandbox.`
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+// Minimal safe environment variables for Python execution
+function getSafeEnv(): Record<string, string> {
+  const env: Record<string, string> = {
+    PATH: '/usr/bin:/bin:/usr/local/bin',
+    HOME: '/tmp',
+    PYTHONUNBUFFERED: '1',
+    MPLBACKEND: 'Agg',
+    MallocStackLogging: '0',
+    MallocNanoZone: '0',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'en_US.UTF-8',
+  };
+  // Only pass PYTHON_PATH if needed, but not other secrets
+  if (process.env.PYTHON_PATH) {
+    env.PYTHON_PATH = process.env.PYTHON_PATH;
+  }
+  return env;
+}
+
+// Security wrapper for test execution
+// Primary security is pattern detection + clean environment
+const SECURITY_WRAPPER = `
+import sys
+import io
+import os
+import builtins
+import warnings
+from contextlib import redirect_stdout, redirect_stderr
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore')
+
+# ============================================
+# SECURITY SANDBOX SETUP (Second Line of Defense)
+# Primary security is pattern detection + clean environment
+# ============================================
+
+# Block dangerous system operations
+os.system = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.system not allowed in sandbox"))
+os.popen = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.popen not allowed in sandbox"))
+if hasattr(os, 'spawn'):
+    os.spawn = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawn not allowed"))
+if hasattr(os, 'spawnl'):
+    os.spawnl = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnl not allowed"))
+if hasattr(os, 'spawnle'):
+    os.spawnle = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnle not allowed"))
+if hasattr(os, 'spawnlp'):
+    os.spawnlp = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnlp not allowed"))
+if hasattr(os, 'spawnlpe'):
+    os.spawnlpe = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnlpe not allowed"))
+if hasattr(os, 'spawnv'):
+    os.spawnv = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnv not allowed"))
+if hasattr(os, 'spawnve'):
+    os.spawnve = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnve not allowed"))
+if hasattr(os, 'spawnvp'):
+    os.spawnvp = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnvp not allowed"))
+if hasattr(os, 'spawnvpe'):
+    os.spawnvpe = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.spawnvpe not allowed"))
+if hasattr(os, 'execl'):
+    os.execl = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execl not allowed"))
+if hasattr(os, 'execle'):
+    os.execle = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execle not allowed"))
+if hasattr(os, 'execlp'):
+    os.execlp = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execlp not allowed"))
+if hasattr(os, 'execlpe'):
+    os.execlpe = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execlpe not allowed"))
+if hasattr(os, 'execv'):
+    os.execv = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execv not allowed"))
+if hasattr(os, 'execve'):
+    os.execve = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execve not allowed"))
+if hasattr(os, 'execvp'):
+    os.execvp = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execvp not allowed"))
+if hasattr(os, 'execvpe'):
+    os.execvpe = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("os.execvpe not allowed"))
+if hasattr(os, 'fork'):
+    os.fork = lambda: (_ for _ in ()).throw(PermissionError("os.fork not allowed"))
+if hasattr(os, 'forkpty'):
+    os.forkpty = lambda: (_ for _ in ()).throw(PermissionError("os.forkpty not allowed"))
+if hasattr(os, 'killpg'):
+    os.killpg = lambda *args: (_ for _ in ()).throw(PermissionError("os.killpg not allowed"))
+if hasattr(os, 'kill'):
+    os.kill = lambda *args: (_ for _ in ()).throw(PermissionError("os.kill not allowed"))
+
+# Block subprocess module
+try:
+    import subprocess
+    subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.call = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.check_call = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.check_output = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.Popen = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.getoutput = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+    subprocess.getstatusoutput = lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("subprocess not allowed"))
+except ImportError:
+    pass
+
+# Create restricted open function to block access to sensitive files
+_original_open = builtins.open
+_ALLOWED_PATHS = ['/tmp/quantum-sandbox']
+
+def _restricted_open(file, mode='r', *args, **kwargs):
+    """Restricted open that blocks access to sensitive files"""
+    if isinstance(file, (str, bytes)):
+        file_str = file if isinstance(file, str) else file.decode()
+        if file_str.startswith('/'):
+            file_str_lower = file_str.lower()
+            
+            # Block reading system sensitive paths
+            blocked_prefixes = ['/etc/passwd', '/etc/shadow', '/proc/self', '/proc/1']
+            for prefix in blocked_prefixes:
+                if file_str_lower.startswith(prefix):
+                    raise PermissionError(f"Access to {prefix} is not allowed in sandbox")
+            
+            # Block reading obvious secrets
+            blocked_patterns = ['.env.local', '.env.', 'secrets', 'credentials', 'private_key']
+            for pattern in blocked_patterns:
+                if pattern in file_str_lower:
+                    raise PermissionError(f"Access to files matching '{pattern}' is not allowed in sandbox")
+    
+    return _original_open(file, mode, *args, **kwargs)
+
+builtins.open = _restricted_open
+
+# ============================================
+# END SECURITY SANDBOX SETUP
+# ============================================
+
+# Setup matplotlib non-interactive backend
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    pass
+
+# Now execute the user code
+`;
+
 /**
- * Build executable code combining solution and test.
- * Matches the logic in sandbox.py for consistent behavior.
+ * Build executable code combining solution and test with security wrapper.
  */
-function buildExecutableCode(
+function buildSecureExecutableCode(
   userCode: string,
   testCode: string,
   entryPoint: string
@@ -42,28 +270,40 @@ function buildExecutableCode(
   }
 
   const cleanedTest = testLines.join('\n');
-
-  // Determine test execution trigger (matching sandbox.py logic)
   const executionTrigger = getTestExecutionTrigger(testCode, entryPoint);
 
-  return `${userCode}
+  // Escape user code for embedding
+  const escapedUserCode = userCode
+    .replace(/\\/g, '\\\\')
+    .replace(/'''/g, "\\'\\'\\'");
+  
+  const escapedTestCode = cleanedTest
+    .replace(/\\/g, '\\\\')
+    .replace(/'''/g, "\\'\\'\\'");
 
-${cleanedTest}${executionTrigger}
+  return `${SECURITY_WRAPPER}
+try:
+    exec(compile('''
+${escapedUserCode}
+
+${escapedTestCode}${executionTrigger}
 
 print("TEST_PASSED")
+''', '<user_code>', 'exec'), {'__builtins__': builtins, '__name__': '__main__'})
+except Exception as e:
+    import traceback
+    traceback.print_exc()
 `;
 }
 
 /**
  * Determine the test execution trigger.
- * Matches the generation phase logic for invoking check() or test_* functions.
  */
 function getTestExecutionTrigger(testCode: string, entryPoint: string): string {
   const hasCheck = /def\s+check\s*\(/.test(testCode);
   const testFuncMatch = testCode.match(/def\s+(test_\w+)\s*\(/);
 
   if (hasCheck && entryPoint) {
-    // Check if check() is already called with entry_point
     const checkCallPattern = new RegExp(
       `check\\s*\\(\\s*${entryPoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\)`
     );
@@ -81,14 +321,12 @@ function getTestExecutionTrigger(testCode: string, entryPoint: string): string {
 
 /**
  * Extract meaningful error message from stderr.
- * Matches the logic in sandbox.py for better error reporting.
  */
 function extractErrorMessage(stderr: string): string {
   if (!stderr) return 'Unknown error';
 
   const lines = stderr.split('\n');
 
-  // Error types to look for
   const errorTypes = [
     'AssertionError',
     'TypeError',
@@ -102,9 +340,9 @@ function extractErrorMessage(stderr: string): string {
     'RuntimeError',
     'SyntaxError',
     'IndentationError',
+    'PermissionError',
   ];
 
-  // Find the error line (last line starting with a known error type)
   let errorLineIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -123,9 +361,7 @@ function extractErrorMessage(stderr: string): string {
 
   const errorLine = lines[errorLineIdx].trim();
 
-  // For AssertionError, find the assertion line that failed
   if (errorLine.startsWith('AssertionError')) {
-    // Look backwards for the assertion statement
     for (let i = errorLineIdx - 1; i >= Math.max(0, errorLineIdx - 10); i--) {
       const line = lines[i].trim();
       if (line.startsWith('assert ')) {
@@ -136,7 +372,6 @@ function extractErrorMessage(stderr: string): string {
       }
     }
 
-    // If no assert found, look for the "File" line with context
     for (let i = errorLineIdx - 1; i >= Math.max(0, errorLineIdx - 5); i--) {
       if (lines[i].includes('File ') && lines[i].includes(', line ')) {
         if (i + 1 < errorLineIdx) {
@@ -151,11 +386,11 @@ function extractErrorMessage(stderr: string): string {
     }
   }
 
-  // For AttributeError/ImportError, include full message
   if (
     errorLine.startsWith('AttributeError') ||
     errorLine.startsWith('ImportError') ||
-    errorLine.startsWith('ModuleNotFoundError')
+    errorLine.startsWith('ModuleNotFoundError') ||
+    errorLine.startsWith('PermissionError')
   ) {
     return errorLine;
   }
@@ -164,8 +399,7 @@ function extractErrorMessage(stderr: string): string {
 }
 
 /**
- * Run tests using subprocess execution matching the evaluate module behavior.
- * Uses the same execution model as sandbox.py for consistency.
+ * Run tests with security wrapper.
  */
 async function runTests(
   userCode: string,
@@ -180,8 +414,8 @@ async function runTests(
   try {
     await mkdir(tempDir, { recursive: true });
 
-    // Build executable code matching sandbox.py logic
-    const fullCode = buildExecutableCode(userCode, testCode, entryPoint);
+    // Build secure executable code with security wrapper
+    const fullCode = buildSecureExecutableCode(userCode, testCode, entryPoint);
     await writeFile(tempFile, fullCode, 'utf-8');
 
     return await new Promise<TestResult>((resolve) => {
@@ -189,19 +423,12 @@ async function runTests(
       let stderr = '';
       let killed = false;
 
-      // Use the PYTHON_PATH environment variable if set, otherwise default to python3
-      // This allows configuring the Python environment with quantum dependencies
       const pythonPath = process.env.PYTHON_PATH || 'python3';
 
       const pythonProcess = spawn(pythonPath, [tempFile], {
         timeout: timeout * 1000,
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: '1',
-          MPLBACKEND: 'Agg',
-          MallocStackLogging: '0',
-          MallocNanoZone: '0',
-        },
+        env: getSafeEnv(),  // Use minimal safe environment
+        cwd: tempDir,  // Run in isolated temp directory
       });
 
       pythonProcess.stdout.on('data', (data) => {
@@ -239,13 +466,10 @@ async function runTests(
           return;
         }
 
-        // Clean up stdout and check for TEST_PASSED marker
         const stdoutClean = stdout.trim();
         const testPassed = code === 0 && stdoutClean.includes('TEST_PASSED');
 
         if (testPassed) {
-          // Success - all tests passed
-          // Include any output before TEST_PASSED (useful debugging info)
           const outputBeforePass = stdoutClean
             .replace('TEST_PASSED', '')
             .trim();
@@ -264,7 +488,6 @@ async function runTests(
             output: outputBeforePass || undefined,
           });
         } else {
-          // Failure - extract meaningful error message
           const cleanStderr = stderr
             .split('\n')
             .filter(
@@ -278,8 +501,6 @@ async function runTests(
             .trim();
 
           const errorMessage = extractErrorMessage(cleanStderr);
-
-          // Include full traceback for debugging
           const fullTraceback = cleanStderr || stderr.trim();
 
           resolve({
@@ -349,6 +570,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate user code for dangerous patterns (first line of defense)
+    const userValidation = validateCode(userCode);
+    if (!userValidation.valid) {
+      return new Response(
+        JSON.stringify({
+          passed: false,
+          total: 0,
+          failed: 0,
+          details: [],
+          executionTime: 0,
+          error: userValidation.error,
+        } as TestResult),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const safeTimeout = Math.min(Math.max(timeout, 5), 60);
     const result = await runTests(userCode, testCode, entryPoint, safeTimeout);
 
@@ -371,4 +608,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

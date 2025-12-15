@@ -79,22 +79,26 @@ export function Header({ mode = 'chat', onModeChange }: HeaderProps) {
   return (
     <header className="bg-zinc-900/95 backdrop-blur-sm border-b border-zinc-800/80 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 py-3">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-4">
-            <div>
-              <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
-                {PROJECT_CONFIG.name}
-              </h1>
-              <p className="text-xs text-zinc-500">
-                {PROJECT_CONFIG.description}
-              </p>
-            </div>
-            {onModeChange && (
-              <ModeToggle mode={mode} onModeChange={onModeChange} />
-            )}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          {/* Title - far left */}
+          <div className="flex-shrink-0">
+            <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
+              {PROJECT_CONFIG.name}
+            </h1>
+            <p className="text-xs text-zinc-500">
+              {PROJECT_CONFIG.description}
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Mode Toggle - center */}
+          {onModeChange && (
+            <div className="flex-1 flex justify-center">
+              <ModeToggle mode={mode} onModeChange={onModeChange} />
+            </div>
+          )}
+
+          {/* Badges - far right */}
+          <div className="flex flex-wrap items-center gap-2 flex-shrink-0 sm:ml-auto">
             <Badge
               href={LINKS.github}
               icon={<Github className="w-3.5 h-3.5" />}
