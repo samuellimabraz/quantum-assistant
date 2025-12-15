@@ -276,7 +276,7 @@ function buildSecureExecutableCode(
   const escapedUserCode = userCode
     .replace(/\\/g, '\\\\')
     .replace(/'''/g, "\\'\\'\\'");
-  
+
   const escapedTestCode = cleanedTest
     .replace(/\\/g, '\\\\')
     .replace(/'''/g, "\\'\\'\\'");
@@ -427,8 +427,8 @@ async function runTests(
 
       const pythonProcess = spawn(pythonPath, [tempFile], {
         timeout: timeout * 1000,
-        env: getSafeEnv() as NodeJS.ProcessEnv,  // Use minimal safe environment
-        cwd: tempDir,  // Run in isolated temp directory
+        env: getSafeEnv() as NodeJS.ProcessEnv,
+        cwd: tempDir,
       });
 
       pythonProcess.stdout.on('data', (data: Buffer) => {
