@@ -1,0 +1,42 @@
+[project]
+name = "quantum-assistant-demo"
+version = "0.1.0"
+description = "Python runtime for Quantum Assistant demo"
+requires-python = ">=3.11"
+dependencies = [
+    "qiskit==2.2.3",
+    "qiskit-aer>=0.17.2",
+    "qiskit-ibm-runtime>=0.43.1",
+    "qiskit-machine-learning>=0.8.2",
+    "qiskit-addon-sqd>=0.12.0",
+    "qiskit-addon-pna>=0.2.0",
+    "qiskit-addon-slc>=0.1.0",
+    "qiskit-addon-utils>=0.3.0",
+    "qiskit-addon-obp>=0.3.0",
+    "qiskit-addon-mpf>=0.3.0",
+    "qiskit-addon-aqc-tensor[aer,quimb-jax]>=0.2.0",
+    "qiskit-addon-opt-mapper>=0.1.0",
+    "qiskit-addon-cutting>=0.10.0",
+    "qiskit-ibm-transpiler>=0.13.1",
+    "qiskit-ibm-catalog>=0.12.0",
+    "qiskit-quimb>=0.0.9",
+    "scipy>=1.15.3",
+    "torch>=2.8.0,<2.9.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "pillow>=10.0",
+    "samplomatic>=0.13.0",
+    "mthree>=3.0.0",
+    "rustworkx>=0.17.1",
+    "imbalanced-learn>=0.14.0",
+    "gem-suite>=0.1.6",
+    "quimb>=1.11.2",
+    "yfinance>=0.2.66",
+    "plotly>=6.5.0",
+    "kaleido>=1.2.0",
+    "pylatexenc>=2.10",
+    "seaborn>=0.13.2",
+    "ffsim>=0.0.63",
+    "pytest>=9.0.0",
+]
+

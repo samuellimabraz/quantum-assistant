@@ -1,0 +1,118 @@
+name: Deploy Demo to HuggingFace Spaces
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/demo/**"
+      - ".github/workflows/hf-spaces-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force deployment even without changes"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  HF_SPACE: samuellimabraz/quantum-assistant
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup Git LFS
+        run: git lfs install
+
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Prepare Space files
+        run: |
+
+          mkdir -p /tmp/hf-space
+
+          cp -r src/demo/* /tmp/hf-space/
+          rm -rf /tmp/hf-space/node_modules
+          rm -rf /tmp/hf-space/.next
+          rm -rf /tmp/hf-space/.venv
+          rm -f /tmp/hf-space/.env.local
+          rm -f /tmp/hf-space/.env
+
+          cat > /tmp/hf-space/README.md << 'EOF'
+          ---
+          title: Quantum Assistant
+          emoji: ♾️
+          colorFrom: indigo
+          colorTo: purple
+          sdk: docker
+          pinned: true
+          app_port: 7860
+          license: apache-2.0
+          short_description: Multimodal VLM for Quantum Computing with Qiskit
+          datasets:
+            - samuellimabraz/quantum-assistant
+          models:
+            - samuellimabraz/Qwen3-VL-8B-rslora-r32-2
+          ---
+
+          Interactive demo for **Quantum Assistant** - A Multimodal Vision Language Model specialized for Quantum Computing with Qiskit.
+
+          ## Features
+
+          - 💬 **Chat Interface**: Interact with the quantum-specialized VLM
+          - 📊 **Dataset Explorer**: Browse examples from the quantum-assistant dataset
+          - ⚡ **Code Execution**: Run Qiskit code directly in the browser
+          - 🖼️ **Image Understanding**: Analyze quantum circuit diagrams, Bloch spheres, and histograms
+
+          ## Resources
+
+          - 📦 [Dataset](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
+          - 🤖 [Models](https://huggingface.co/collections/samuellimabraz/quantum-assistant)
+          - 💻 [GitHub](https://github.com/samuellimabraz/quantum-assistant)
+
+          ## Configuration
+
+          Configure the model endpoint via Space secrets:
+
+          - `DEMO_MODEL_URL`: VLM API endpoint (OpenAI-compatible)
+          - `DEMO_MODEL_NAME`: Model identifier
+          - `DEMO_API_KEY`: API authentication key
+
+          ## Author
+
+          **Samuel Lima Braz** - UNIFEI (Universidade Federal de Itajubá)
+
+          Final Graduation Project - 2025
+          EOF
+
+          sed -i 's/^          //' /tmp/hf-space/README.md
+
+      - name: Push to HuggingFace Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd /tmp/hf-space
+
+          git init -b main
+          git remote add space https://huggingface.co/spaces/${{ env.HF_SPACE }}
+
+          git config http.postBuffer 524288000
+          git lfs install
+          git lfs track "*.png" "*.jpg" "*.jpeg" "*.gif" "*.webp" "*.ico" "*.svg"
+          git add .gitattributes
+
+          git add -A
+          git commit -m "Deploy demo from GitHub Actions - $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+
+          git push --force https://user:${HF_TOKEN}@huggingface.co/spaces/${{ env.HF_SPACE }} HEAD:main
