@@ -16,6 +16,7 @@ import type { Message as MessageType } from '@/types';
 interface MessageProps {
   message: MessageType;
   onCopyCode?: (code: string) => void;
+  loadingStatus?: React.ReactNode;
 }
 
 // Custom matte dark theme - muted, professional colors
@@ -391,7 +392,7 @@ function looksLikeCode(text: string): boolean {
   return singleLinePatterns.some((p) => p.test(text.trim()));
 }
 
-export function Message({ message, onCopyCode }: MessageProps) {
+export function Message({ message, onCopyCode, loadingStatus }: MessageProps) {
   const isUser = message.role === 'user';
   const isLoading = message.isLoading;
 
@@ -478,11 +479,13 @@ export function Message({ message, onCopyCode }: MessageProps) {
           )}
         >
           {isLoading ? (
-            <div className="typing-indicator py-1">
-              <span />
-              <span />
-              <span />
-            </div>
+            loadingStatus || (
+              <div className="typing-indicator py-1">
+                <span />
+                <span />
+                <span />
+              </div>
+            )
           ) : (
             <div className={clsx('markdown-content', isUser && 'text-white/90')}>
               <ReactMarkdown

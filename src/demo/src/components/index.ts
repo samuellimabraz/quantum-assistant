@@ -6,6 +6,7 @@ export type { MessageInputRef } from './Chat/MessageInput';
 export { QubitIcon } from './Chat/QubitIcon';
 export { ExecutionResult } from './Chat/ExecutionResult';
 export type { ExecutionResultData } from './Chat/ExecutionResult';
+export { LoadingStatus } from './Chat/LoadingStatus';
 export { ExamplesPanel } from './Examples/ExamplesPanel';
 export { ExampleCard } from './Examples/ExampleCard';
 export { ResizablePanel, useResizableWidth } from './ResizablePanel/ResizablePanel';
