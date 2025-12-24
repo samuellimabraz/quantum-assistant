@@ -3,6 +3,7 @@
 import { Github, Database, Boxes, ExternalLink, MessageSquare, Code } from 'lucide-react';
 import { clsx } from 'clsx';
 import { PROJECT_CONFIG, LINKS } from '@/config/constants';
+import { WarmupIndicator } from '@/components/Chat/WarmupIndicator';
 import type { AppMode } from '@/types';
 
 interface HeaderProps {
@@ -82,9 +83,12 @@ export function Header({ mode = 'chat', onModeChange }: HeaderProps) {
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {/* Title - far left */}
           <div className="flex-shrink-0">
-            <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
-              {PROJECT_CONFIG.name}
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
+                {PROJECT_CONFIG.name}
+              </h1>
+              <WarmupIndicator />
+            </div>
             <p className="text-xs text-zinc-500">
               {PROJECT_CONFIG.description}
             </p>
