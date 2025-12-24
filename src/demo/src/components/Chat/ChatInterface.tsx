@@ -5,6 +5,7 @@ import { Trash2 } from 'lucide-react';
 import { Message } from './Message';
 import { MessageInput, MessageInputRef } from './MessageInput';
 import { QubitIcon } from './QubitIcon';
+import { LoadingStatus } from './LoadingStatus';
 import { SYSTEM_PROMPT } from '@/config/constants';
 import { resizeImageForInference, fetchAndResizeImage } from '@/lib/utils/image';
 import { postProcessResponse } from '@/lib/utils/response';
@@ -18,6 +19,7 @@ interface ChatInterfaceProps {
 export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<MessageType[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasStartedStreaming, setHasStartedStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<MessageInputRef>(null);
   const processedExampleRef = useRef<string | null>(null);
@@ -77,6 +79,7 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
 
     setMessages((prev) => [...prev, userMessage, loadingMessage]);
     setIsLoading(true);
+    setHasStartedStreaming(false);
 
     try {
       let imageData: string | undefined;
@@ -134,12 +137,6 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
       let buffer = '';
       let fullContent = '';
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId ? { ...m, isLoading: false } : m
-        )
-      );
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -161,6 +158,16 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
             }
 
             if (data.content) {
+              // First content received - streaming has started
+              if (fullContent === '') {
+                setHasStartedStreaming(true);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMessageId ? { ...m, isLoading: false } : m
+                  )
+                );
+              }
+              
               fullContent += data.content;
               const processedContent = postProcessResponse(fullContent);
               setMessages((prev) =>
@@ -204,6 +211,7 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
       );
     } finally {
       setIsLoading(false);
+      setHasStartedStreaming(false);
       abortControllerRef.current = null;
     }
   };
@@ -275,6 +283,14 @@ export function ChatInterface({ selectedExample, onExampleUsed }: ChatInterfaceP
               key={message.id}
               message={message}
               onCopyCode={handleCopyCode}
+              loadingStatus={
+                message.isLoading ? (
+                  <LoadingStatus
+                    isLoading={isLoading}
+                    hasStartedStreaming={hasStartedStreaming}
+                  />
+                ) : undefined
+              }
             />
           ))
         )}

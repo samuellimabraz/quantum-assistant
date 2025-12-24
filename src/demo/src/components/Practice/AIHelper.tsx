@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Sparkles, Send, Loader2, Trash2, ChevronLeft, Copy, Check, Code, Play } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Sparkles, Send, Loader2, Trash2, ChevronLeft, Copy, Check, Play } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { clsx } from 'clsx';
 import type { CodingProblem } from '@/types';
-import { postProcessResponse, extractCodeFromResponse } from '@/lib/utils/response';
+import { postProcessResponse } from '@/lib/utils/response';
+import { LoadingStatus } from '../Chat/LoadingStatus';
 
 interface AIHelperProps {
   problem: CodingProblem | null;
@@ -236,6 +237,7 @@ export function AIHelper({
   const [messages, setMessages] = useState<HelperMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [hasStartedStreaming, setHasStartedStreaming] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -306,6 +308,7 @@ export function AIHelper({
     setMessages((prev) => [...prev, userMessage, loadingMessage]);
     setInput('');
     setIsLoading(true);
+    setHasStartedStreaming(false);
 
     try {
       // Build context message with problem info
@@ -393,6 +396,10 @@ export function AIHelper({
           try {
             const data = JSON.parse(jsonStr);
             if (data.content) {
+              // First content received - streaming has started
+              if (fullContent === '') {
+                setHasStartedStreaming(true);
+              }
               fullContent += data.content;
               // Use postProcessResponse like ChatInterface does for proper formatting
               const processedContent = postProcessResponse(fullContent);
@@ -427,6 +434,7 @@ export function AIHelper({
       );
     } finally {
       setIsLoading(false);
+      setHasStartedStreaming(false);
       abortControllerRef.current = null;
     }
   };
@@ -582,10 +590,10 @@ export function AIHelper({
                   )}
                 >
                   {message.role === 'assistant' && !message.content ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
-                      <span className="text-zinc-500">Thinking...</span>
-                    </div>
+                    <LoadingStatus
+                      isLoading={isLoading}
+                      hasStartedStreaming={hasStartedStreaming}
+                    />
                   ) : (
                     <ReactMarkdown
                       components={{

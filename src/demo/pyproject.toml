@@ -31,6 +31,7 @@ dependencies = [
     "imbalanced-learn>=0.14.0",
     "gem-suite>=0.1.6",
     "quimb>=1.11.2",
+    "numba>=0.57.0",
     "yfinance>=0.2.66",
     "plotly>=6.5.0",
     "kaleido>=1.2.0",
