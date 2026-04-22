@@ -340,28 +340,38 @@ class SyntheticDatasetRunner:
         first_idx, first_line = non_empty[0]
         first_indent = len(first_line) - len(first_line.lstrip())
 
-        # Check for the common pattern: first line at 0, rest at 4
+        # Check for the common pattern: first line at 0, rest at >0 (an
+        # LLM quirk where a leftover base indent shows only on lines 2+).
+        # This heuristic can accidentally collapse a genuine nested block
+        # when the first line opens a block (e.g., `for ...:`) and every
+        # subsequent line is inside that block -- stripping the min
+        # subsequent indent would put the inner body at the same column as
+        # the block opener (IndentationError). We guard the heuristic with
+        # a compile-check: if the rewritten body is not syntactically
+        # valid inside a dummy function, fall back to the standard case.
         if first_indent == 0 and len(non_empty) > 1:
             subsequent_indents = [len(line) - len(line.lstrip()) for _, line in non_empty[1:]]
             min_subsequent = min(subsequent_indents) if subsequent_indents else 0
 
-            # If subsequent lines have extra indentation, they should align with first line
             if min_subsequent > 0:
-                # All lines should be at target_indent base
-                result = []
+                candidate = []
                 for i, line in enumerate(body_lines):
                     if not line.strip():
-                        result.append("")
+                        candidate.append("")
                     elif i == first_idx:
-                        # First line gets target indent
-                        result.append(" " * target_indent + line.lstrip())
+                        candidate.append(" " * target_indent + line.lstrip())
                     else:
-                        # Subsequent lines: remove extra base indent, add target
                         current_indent = len(line) - len(line.lstrip())
                         relative = current_indent - min_subsequent
                         new_indent = " " * (target_indent + relative)
-                        result.append(new_indent + line.lstrip())
-                return result
+                        candidate.append(new_indent + line.lstrip())
+                try:
+                    # Wrap in a dummy function to validate body indentation.
+                    compile("def _f():\n" + "\n".join(candidate), "<assemble-check>", "exec")
+                    return candidate
+                except SyntaxError:
+                    # Quirky rewrite collapsed a nested block; fall through.
+                    pass
 
         # Standard case: subtract min indent and add target
         min_indent = min(len(line) - len(line.lstrip()) for _, line in non_empty)

@@ -473,6 +473,51 @@ def verify_canonical(
 
 
 @app.command()
+def verify_canonical_synthetic(
+    dataset_path: Path = typer.Option(
+        ..., "--dataset", "-d", help="Path to HF dataset directory (save_to_disk or parquet)"
+    ),
+    split: str = typer.Option("test", "--split", help="Dataset split to verify"),
+    timeout: int = typer.Option(60, "--timeout", help="Execution timeout in seconds per sample"),
+    execution_max_concurrent: int = typer.Option(
+        8, "--execution-max-concurrent", help="Max concurrent subprocess executions"
+    ),
+    output: Path = typer.Option(None, "--output", "-o", help="Path to save verification results"),
+    max_samples: int = typer.Option(
+        None, "--max-samples", help="Limit number of samples to verify"
+    ),
+):
+    """Verify that canonical (ground truth) answers in the synthetic dataset pass their tests."""
+    client = LLMClient(base_url="http://localhost", model_name="dummy")
+
+    runner = SyntheticDatasetRunner(
+        dataset_path=dataset_path,
+        model_client=client,
+        timeout=timeout,
+        execution_max_concurrent=execution_max_concurrent,
+    )
+
+    samples = runner.load_dataset(split=split)
+
+    if max_samples:
+        samples = samples[:max_samples]
+        console.print(f"[yellow]Limiting to first {max_samples} samples[/yellow]")
+
+    try:
+        verification = runner.verify_canonical_solutions(samples, save_results=output)
+        if verification.failed == 0:
+            console.print("\n[green]✓ All canonical solutions passed![/green]")
+        else:
+            console.print(
+                f"\n[yellow]⚠ {verification.failed} canonical solutions failed[/yellow]"
+            )
+            raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"\n[red]✗ Verification failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def compare(
     results_dir: Path = typer.Option(
         Path("outputs/evaluate"),
