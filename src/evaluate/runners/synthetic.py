@@ -111,6 +111,8 @@ class SyntheticDatasetRunner:
         num_samples_per_task: int = 1,
         timeout: int = 30,
         max_concurrent: int = 10,
+        mask_images: bool = False,
+        execution_max_concurrent: int = 16,
     ):
         """
         Initialize synthetic dataset runner.
@@ -123,6 +125,9 @@ class SyntheticDatasetRunner:
             num_samples_per_task: Number of solutions to generate per task
             timeout: Execution timeout for code samples
             max_concurrent: Maximum concurrent API requests
+            mask_images: If True, send prompts without images even when a sample
+                has an image. Used for the image-contribution ablation.
+            execution_max_concurrent: Max concurrent code-execution subprocesses.
         """
         self.dataset_path = Path(dataset_path)
         self.model_client = model_client
@@ -131,6 +136,8 @@ class SyntheticDatasetRunner:
         self.num_samples = num_samples_per_task
         self.max_concurrent = max_concurrent
         self.timeout = timeout
+        self.mask_images = mask_images
+        self.execution_max_concurrent = execution_max_concurrent
         self.executor = CodeExecutor(timeout=timeout)
         self.console = Console()
 
@@ -154,10 +161,27 @@ class SyntheticDatasetRunner:
         return self._load_from_huggingface(split)
 
     def _load_from_huggingface(self, split: str) -> list[dict[str, Any]]:
-        """Load from HuggingFace dataset directory."""
-        from datasets import load_from_disk
+        """Load from a HuggingFace dataset directory.
 
-        dataset_dict = load_from_disk(str(self.dataset_path))
+        Supports both ``save_to_disk`` format (with ``dataset_info.json``) and a
+        plain directory of ``{split}-*.parquet`` files as produced by
+        ``huggingface_hub.snapshot_download``.
+        """
+        from datasets import load_dataset, load_from_disk
+
+        try:
+            dataset_dict = load_from_disk(str(self.dataset_path))
+        except FileNotFoundError:
+            parquet_files = sorted(self.dataset_path.glob(f"{split}-*.parquet"))
+            if not parquet_files:
+                raise ValueError(
+                    f"Dataset at {self.dataset_path} is not a save_to_disk directory "
+                    f"and no {split}-*.parquet files were found."
+                )
+            dataset = load_dataset(
+                "parquet", data_files=[str(p) for p in parquet_files], split="train"
+            )
+            dataset_dict = {split: dataset}
 
         if split not in dataset_dict:
             available = list(dataset_dict.keys())
@@ -454,14 +478,15 @@ class SyntheticDatasetRunner:
             task_id = sample["task_id"]
             messages = self.create_messages(sample, system_prompt)
             image_path = self._get_image_path(sample)
+            use_image = image_path is not None and is_vlm and not self.mask_images
 
             for _ in range(self.num_samples):
                 all_tasks.append(
                     {
                         "task_id": task_id,
                         "messages": messages,
-                        "image_path": image_path,
-                        "is_multimodal": image_path is not None and is_vlm,
+                        "image_path": image_path if use_image else None,
+                        "is_multimodal": use_image,
                     }
                 )
 
@@ -566,58 +591,80 @@ class SyntheticDatasetRunner:
         verification = CanonicalVerification(total=len(samples))
         results = []
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=self.console,
-        ) as progress:
-            task = progress.add_task("Verifying canonical solutions...", total=len(samples))
+        # Build the execution plan; samples without test_code or of QA type
+        # are handled synchronously (no subprocess).
+        exec_samples: list[dict[str, Any]] = []
+        exec_items: list[tuple[str, str | None, str | None]] = []
+        sample_slot: dict[int, int] = {}
 
-            for sample in samples:
-                task_id = sample.get("task_id", "unknown")
-                question_type = sample.get("question_type", "qa")
-                answer = sample.get("answer", "")
-                test_code = sample.get("test_code", "")
+        for i, sample in enumerate(samples):
+            question_type = sample.get("question_type", "qa")
+            test_code = sample.get("test_code", "")
+            if question_type in QuestionType.CODE_TYPES and test_code:
+                combined = self.combine_code(sample, sample.get("answer", ""))
                 entry_point = sample.get("entry_point", "")
+                sample_slot[i] = len(exec_items)
+                exec_samples.append(sample)
+                exec_items.append((combined, test_code, entry_point))
 
-                result = {
-                    "task_id": task_id,
-                    "question_type": question_type,
-                    "passed": True,
-                    "error": "",
-                    "skipped": False,
-                }
+        exec_outputs: list[Any] = []
+        if exec_items:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=self.console,
+            ) as progress:
+                task = progress.add_task(
+                    f"Verifying canonical (pool={self.execution_max_concurrent})...",
+                    total=len(exec_items),
+                )
+                exec_outputs = asyncio.run(
+                    self.executor.execute_many_async(
+                        exec_items,
+                        max_concurrent=self.execution_max_concurrent,
+                        progress_callback=lambda c: progress.update(task, completed=c),
+                    )
+                )
 
-                # Only verify code types with tests
-                if question_type not in QuestionType.CODE_TYPES or not test_code:
-                    result["skipped"] = True
-                    result["skip_reason"] = "No test code" if not test_code else "QA type"
+        for i, sample in enumerate(samples):
+            task_id = sample.get("task_id", "unknown")
+            question_type = sample.get("question_type", "qa")
+            test_code = sample.get("test_code", "")
+
+            result = {
+                "task_id": task_id,
+                "question_type": question_type,
+                "passed": True,
+                "error": "",
+                "skipped": False,
+            }
+
+            if question_type not in QuestionType.CODE_TYPES or not test_code:
+                result["skipped"] = True
+                result["skip_reason"] = "No test code" if not test_code else "QA type"
+                verification.passed += 1
+            else:
+                slot = sample_slot[i]
+                exec_r = exec_outputs[slot]
+                result["passed"] = exec_r.success
+                result["error"] = exec_r.error if not exec_r.success else ""
+
+                if exec_r.success:
                     verification.passed += 1
                 else:
-                    # Combine answer with test code
-                    combined = self.combine_code(sample, answer)
-                    exec_result = self.execute_code(combined, test_code, entry_point)
+                    verification.failed += 1
+                    verification.failures.append(
+                        {
+                            "task_id": task_id,
+                            "question_type": question_type,
+                            "error": exec_r.error or "Unknown error",
+                        }
+                    )
 
-                    result["passed"] = exec_result["success"]
-                    result["error"] = exec_result.get("error", "")
-
-                    if exec_result["success"]:
-                        verification.passed += 1
-                    else:
-                        verification.failed += 1
-                        verification.failures.append(
-                            {
-                                "task_id": task_id,
-                                "question_type": question_type,
-                                "error": exec_result.get("error", "Unknown error"),
-                            }
-                        )
-
-                results.append(result)
-                progress.update(task, advance=1)
+            results.append(result)
 
         # Print summary
         self._print_canonical_verification_summary(verification)
@@ -681,6 +728,7 @@ class SyntheticDatasetRunner:
         self,
         sample: dict[str, Any],
         solutions: list[str],
+        precomputed_execution_results: list[dict[str, Any]] | None = None,
     ) -> SampleResult:
         """
         Evaluate a single sample with detailed results.
@@ -688,6 +736,8 @@ class SyntheticDatasetRunner:
         Args:
             sample: Sample dictionary
             solutions: List of generated solutions
+            precomputed_execution_results: If provided, skip execution and use
+                these results. Only applies to code types.
 
         Returns:
             SampleResult with detailed evaluation info
@@ -705,27 +755,36 @@ class SyntheticDatasetRunner:
         metrics = {}
 
         if question_type in QuestionType.CODE_TYPES:
-            # Evaluate code types with test execution
-            for solution in solutions:
-                combined = self.combine_code(sample, solution)
-                combined_codes.append(combined)
+            combined_codes = [self.combine_code(sample, s) for s in solutions]
 
-                if test_code:
-                    exec_result = self.execute_code(combined, test_code, entry_point)
-                else:
-                    # No test - check syntax only
-                    try:
-                        compile(combined, "<string>", "exec")
-                        exec_result = {"success": True, "error": "", "output": "", "timeout": False}
-                    except SyntaxError as e:
-                        exec_result = {
-                            "success": False,
-                            "error": str(e),
-                            "output": "",
-                            "timeout": False,
-                        }
-
-                execution_results.append(exec_result)
+            if precomputed_execution_results is not None:
+                if len(precomputed_execution_results) != len(solutions):
+                    raise ValueError(
+                        f"precomputed_execution_results length mismatch for {task_id}: "
+                        f"got {len(precomputed_execution_results)}, expected {len(solutions)}"
+                    )
+                execution_results = list(precomputed_execution_results)
+            else:
+                for combined in combined_codes:
+                    if test_code:
+                        exec_result = self.execute_code(combined, test_code, entry_point)
+                    else:
+                        try:
+                            compile(combined, "<string>", "exec")
+                            exec_result = {
+                                "success": True,
+                                "error": "",
+                                "output": "",
+                                "timeout": False,
+                            }
+                        except SyntaxError as e:
+                            exec_result = {
+                                "success": False,
+                                "error": str(e),
+                                "output": "",
+                                "timeout": False,
+                            }
+                    execution_results.append(exec_result)
 
             passed_count = sum(1 for r in execution_results if r["success"])
             success = passed_count > 0
@@ -767,6 +826,90 @@ class SyntheticDatasetRunner:
             metrics=metrics,
             success=success,
         )
+
+    async def _execute_all_code_async(
+        self,
+        samples: list[dict[str, Any]],
+        solutions_dict: dict[str, list[str]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Batched concurrent execution for code-type samples.
+
+        QA samples are not included here; they are handled in ``evaluate_sample``
+        via text metrics. Samples whose ``test_code`` is empty use the syntax
+        check fallback (same as the sequential path) and are executed without
+        a subprocess.
+        """
+        items: list[tuple[str, str | None, str | None]] = []
+        items_index: list[tuple[str, int]] = []  # (task_id, solution_idx)
+
+        per_sample: dict[str, list[dict[str, Any] | None]] = {}
+
+        for sample in samples:
+            task_id = sample["task_id"]
+            question_type = sample.get("question_type", "qa")
+            solutions = solutions_dict.get(task_id, [])
+
+            if question_type not in QuestionType.CODE_TYPES:
+                continue
+
+            test_code = sample.get("test_code", "")
+            entry_point = sample.get("entry_point", "")
+
+            per_sample[task_id] = [None] * len(solutions)
+
+            for s_idx, solution in enumerate(solutions):
+                combined = self.combine_code(sample, solution)
+                if test_code:
+                    items.append((combined, test_code, entry_point))
+                    items_index.append((task_id, s_idx))
+                else:
+                    # No test code: syntax check only (matches sequential path)
+                    try:
+                        compile(combined, "<string>", "exec")
+                        per_sample[task_id][s_idx] = {
+                            "success": True,
+                            "error": "",
+                            "output": "",
+                            "timeout": False,
+                        }
+                    except SyntaxError as e:
+                        per_sample[task_id][s_idx] = {
+                            "success": False,
+                            "error": str(e),
+                            "output": "",
+                            "timeout": False,
+                        }
+
+        if not items:
+            return {k: v for k, v in per_sample.items()}
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task(
+                f"Executing code (pool={self.execution_max_concurrent})...", total=len(items)
+            )
+
+            results = await self.executor.execute_many_async(
+                items,
+                max_concurrent=self.execution_max_concurrent,
+                progress_callback=lambda c: progress.update(task, completed=c),
+            )
+
+        for (task_id, s_idx), res in zip(items_index, results):
+            per_sample[task_id][s_idx] = {
+                "success": res.success,
+                "error": res.error if not res.success else "",
+                "output": res.output,
+                "timeout": res.timeout,
+            }
+
+        return per_sample
 
     def _compute_modality_metrics(
         self, results: list[SampleResult], is_multimodal: bool
@@ -1001,8 +1144,13 @@ class SyntheticDatasetRunner:
         # Generate solutions
         solutions_dict = self.generate_solutions(samples, system_prompt)
 
-        # Evaluate each sample
-        self.console.print("\n[bold]Evaluating solutions...[/bold]")
+        # Run all code executions concurrently (code types only; QA samples
+        # skip subprocess execution and fall back to text metrics).
+        self.console.print("\n[bold]Executing generated code...[/bold]")
+        exec_map = asyncio.run(self._execute_all_code_async(samples, solutions_dict))
+
+        # Aggregate per-sample metrics using pre-computed execution results
+        self.console.print("\n[bold]Aggregating per-sample metrics...[/bold]")
         detailed_results: list[SampleResult] = []
 
         with Progress(
@@ -1013,12 +1161,16 @@ class SyntheticDatasetRunner:
             TimeElapsedColumn(),
             console=self.console,
         ) as progress:
-            eval_task = progress.add_task("Evaluating...", total=len(samples))
+            eval_task = progress.add_task("Aggregating...", total=len(samples))
 
             for sample in samples:
                 task_id = sample["task_id"]
                 solutions = solutions_dict.get(task_id, [])
-                result = self.evaluate_sample(sample, solutions)
+                result = self.evaluate_sample(
+                    sample,
+                    solutions,
+                    precomputed_execution_results=exec_map.get(task_id),
+                )
                 detailed_results.append(result)
                 progress.update(eval_task, advance=1)
 

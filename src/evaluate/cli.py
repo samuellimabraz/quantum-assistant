@@ -86,6 +86,7 @@ def _run_qiskit_humaneval(config: EvaluationConfig, run_timestamp: datetime) -> 
         timeout=config.metrics.execution_timeout,
         max_concurrent=config.metrics.max_concurrent,
         dataset_type=config.dataset.dataset_variant,
+        execution_max_concurrent=config.metrics.execution_max_concurrent,
     )
 
     samples = runner.load_dataset()
@@ -124,6 +125,8 @@ def _run_synthetic(config: EvaluationConfig, run_timestamp: datetime) -> None:
         num_samples_per_task=config.metrics.num_samples_per_task,
         timeout=config.metrics.execution_timeout,
         max_concurrent=config.metrics.max_concurrent,
+        mask_images=config.dataset.mask_images,
+        execution_max_concurrent=config.metrics.execution_max_concurrent,
     )
 
     samples = runner.load_dataset(split=config.dataset.split)
@@ -134,6 +137,14 @@ def _run_synthetic(config: EvaluationConfig, run_timestamp: datetime) -> None:
         samples = [s for s in samples if s.get("image") is None]
         console.print(
             f"[yellow]Filtering to text-only: {len(samples)}/{original_count} samples[/yellow]"
+        )
+
+    # Filter to multimodal-only samples if requested (R1.1 matched-task ablation)
+    if config.dataset.multimodal_only:
+        original_count = len(samples)
+        samples = [s for s in samples if s.get("image") is not None]
+        console.print(
+            f"[yellow]Filtering to multimodal-only: {len(samples)}/{original_count} samples[/yellow]"
         )
 
     if config.dataset.max_samples:
@@ -292,6 +303,16 @@ def synthetic(
     text_only: bool = typer.Option(
         False, "--text-only", help="Filter to text-only samples (no images)"
     ),
+    multimodal_only: bool = typer.Option(
+        False,
+        "--multimodal-only",
+        help="Filter to multimodal-only samples (image != None). Used for R1.1 matched-task ablation.",
+    ),
+    mask_images: bool = typer.Option(
+        False,
+        "--mask-images",
+        help="Send prompts without images even when present (R1.1 ablation condition B).",
+    ),
     system_prompt: str = typer.Option(
         "",
         "--system-prompt",
@@ -365,6 +386,7 @@ def synthetic(
         num_samples_per_task=num_samples,
         timeout=timeout,
         max_concurrent=max_concurrent,
+        mask_images=mask_images,
     )
 
     samples = runner.load_dataset(split=split)
@@ -375,6 +397,14 @@ def synthetic(
         samples = [s for s in samples if s.get("image") is None]
         console.print(
             f"[yellow]Filtering to text-only: {len(samples)}/{original_count} samples[/yellow]"
+        )
+
+    # Filter to multimodal-only samples if requested (R1.1 ablation)
+    if multimodal_only:
+        original_count = len(samples)
+        samples = [s for s in samples if s.get("image") is not None]
+        console.print(
+            f"[yellow]Filtering to multimodal-only: {len(samples)}/{original_count} samples[/yellow]"
         )
 
     if max_samples:
@@ -567,3 +597,7 @@ def compare(
         table.add_row(*row)
 
     console.print(table)
+
+
+if __name__ == "__main__":
+    app()

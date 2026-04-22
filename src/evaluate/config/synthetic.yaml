@@ -24,9 +24,9 @@ model:
 dataset:
   type: "synthetic"
   # Path to HuggingFace dataset directory (outputs/final from synthetic pipeline)
-  path: "/Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/final"
+  path: "${SYNTH_DATASET_PATH}"
   # Directory containing images (if not embedded in dataset)
-  images_dir: "/Users/samuel/Developer/avante/unifei/tcc/quantum-assistant/outputs/images"
+  images_dir: null
   # Dataset split to evaluate
   split: "test"
   # Limit samples for testing (null for all)
