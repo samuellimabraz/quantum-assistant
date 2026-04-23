@@ -57,6 +57,25 @@ if [[ ! -x "${VLLM_BIN}" ]]; then
     exit 10
 fi
 
+# Purge cached weights for this model before serving (set PURGE_HF_CACHE=1).
+# We observed that a partial or interleaved HF download can leave the snapshot
+# tree tagged complete while serving garbled weights, producing ~25 pp Pass@1
+# drops that recover after a clean re-fetch. Purging is quick (directory move,
+# background delete) and robust, so is on by default for scripted runs.
+if [[ "${PURGE_HF_CACHE:-1}" == "1" ]]; then
+    hf_hub_cache="${HF_HUB_CACHE:-${HF_HOME:-${HOME}/.cache/huggingface}/hub}"
+    model_dir_name="models--${HF_MODEL_ID//\//--}"
+    cache_target="${hf_hub_cache}/${model_dir_name}"
+    if [[ -d "${cache_target}" ]]; then
+        trash_root="${PURGE_HF_TRASH:-${hf_hub_cache}/.trash}"
+        mkdir -p "${trash_root}"
+        trash_path="${trash_root}/${model_dir_name}.$$.$(date -u +%s)"
+        echo "[serve_and_eval] purging HF cache for ${HF_MODEL_ID} -> ${trash_path}"
+        mv "${cache_target}" "${trash_path}" || true
+        (rm -rf "${trash_path}" >/dev/null 2>&1 &)
+    fi
+fi
+
 export MODEL_BASE_URL="http://localhost:${VLLM_PORT}/v1"
 export API_KEY="${API_KEY:-EMPTY}"
 export MODEL_NAME

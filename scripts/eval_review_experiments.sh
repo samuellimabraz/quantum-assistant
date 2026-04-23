@@ -10,12 +10,12 @@
 #   MODEL_BASE_URL   vLLM endpoint (default http://localhost:8000/v1)
 #   API_KEY          dummy api key for vLLM (default EMPTY)
 #   IS_VLM           "true" for Qwen3-VL candidates, "false" for text LLMs
-#   RUN_PASSK        "true" to run QHE Pass@k sweep (R1.4), "false" to skip
 #   RUN_QHE          "true" (default) to run QHE Pass@1
 #   RUN_QHE_HARD     "true" (default) to run QHE-Hard Pass@1
+#   RUN_PASSK        "true" to run QHE Pass@k sweep (R1.4), "false" to skip
+#   RUN_PASSK_HARD   "true" to run QHE-Hard Pass@k sweep (R1.4), "false" to skip
 #   RUN_SYNTH        "true" (default) to run full synthetic test split
 #                     (VLMs use multimodal path, text LLMs use --text-only)
-#   RUN_IMG_MASK     "true" to run R1.1 ablation (VLMs only)
 #   QHE_PATH                /workspace/qiskit-human-eval/.../dataset_qiskit_test_human_eval.json
 #   QHE_HARD_PATH           /workspace/qiskit-human-eval/.../dataset_qiskit_test_human_eval_hard.json
 #   SYNTH_DATASET_PATH      HF dataset directory (save_to_disk or parquet layout)
@@ -33,8 +33,8 @@ IS_VLM="${IS_VLM:-false}"
 RUN_QHE="${RUN_QHE:-true}"
 RUN_QHE_HARD="${RUN_QHE_HARD:-true}"
 RUN_PASSK="${RUN_PASSK:-false}"
+RUN_PASSK_HARD="${RUN_PASSK_HARD:-false}"
 RUN_SYNTH="${RUN_SYNTH:-true}"
-RUN_IMG_MASK="${RUN_IMG_MASK:-${IS_VLM}}"
 
 if [[ -z "${MODEL_NAME:-}" ]]; then
     echo "ERROR: MODEL_NAME is required." >&2
@@ -55,8 +55,10 @@ results_root="${PROJECT_ROOT}/outputs/evaluate"
 export QHE_RESULTS_DIR="${results_root}/qiskit-humaneval/${MODEL_NAME}"
 export QHE_HARD_RESULTS_DIR="${results_root}/qiskit-humaneval-hard/${MODEL_NAME}"
 export QHE_PASSK_RESULTS_DIR="${results_root}/qiskit-humaneval-passk/${MODEL_NAME}"
+export QHE_HARD_PASSK_RESULTS_DIR="${results_root}/qiskit-humaneval-hard-passk/${MODEL_NAME}"
 export SYNTH_RESULTS_DIR="${results_root}/synthetic/${MODEL_NAME}"
-mkdir -p "${QHE_RESULTS_DIR}" "${QHE_HARD_RESULTS_DIR}" "${QHE_PASSK_RESULTS_DIR}" "${SYNTH_RESULTS_DIR}"
+mkdir -p "${QHE_RESULTS_DIR}" "${QHE_HARD_RESULTS_DIR}" "${QHE_PASSK_RESULTS_DIR}" \
+    "${QHE_HARD_PASSK_RESULTS_DIR}" "${SYNTH_RESULTS_DIR}"
 
 CONFIG_DIR="evaluate/config"
 
@@ -120,23 +122,21 @@ if [[ "${RUN_QHE_HARD}" == "true" ]]; then
     run_config "${CONFIG_DIR}/qiskit_humaneval_hard.yaml" "${QHE_HARD_RESULTS_DIR}" "qhe_hard" || overall_status=$?
 fi
 
-# [4] Synthetic test split
-if [[ "${RUN_SYNTH}" == "true" ]]; then
-    if [[ "${IS_VLM}" == "true" ]]; then
-        log_header "[4] Synthetic test — full set (VLM) — ${MODEL_NAME}"
-        run_config "${CONFIG_DIR}/synthetic.yaml" "${SYNTH_RESULTS_DIR}" "synth" || overall_status=$?
-    else
-        log_header "[4] Synthetic test — text-only subset (LLM) — ${MODEL_NAME}"
-        run_config "${CONFIG_DIR}/synthetic_text_only.yaml" "${SYNTH_RESULTS_DIR}" "synth_text" || overall_status=$?
-    fi
+# [4] Qiskit HumanEval Hard Pass@k (R1.4)
+if [[ "${RUN_PASSK_HARD}" == "true" ]]; then
+    log_header "[4] QHE-Hard Pass@k (1,5,10) — ${MODEL_NAME}"
+    run_config "${CONFIG_DIR}/qiskit_humaneval_hard_passk.yaml" "${QHE_HARD_PASSK_RESULTS_DIR}" "qhe_hard_passk" || overall_status=$?
 fi
 
-# [5][6] Image-masking ablation (R1.1, VLMs only)
-if [[ "${RUN_IMG_MASK}" == "true" ]]; then
-    log_header "[5] Synthetic MM-only — image kept — ${MODEL_NAME}"
-    run_config "${CONFIG_DIR}/synthetic_multimodal_only.yaml" "${SYNTH_RESULTS_DIR}" "synth_mm_kept" || overall_status=$?
-    log_header "[6] Synthetic MM-only — image masked — ${MODEL_NAME}"
-    run_config "${CONFIG_DIR}/synthetic_image_mask.yaml" "${SYNTH_RESULTS_DIR}" "synth_mm_masked" || overall_status=$?
+# [5] Synthetic test split
+if [[ "${RUN_SYNTH}" == "true" ]]; then
+    if [[ "${IS_VLM}" == "true" ]]; then
+        log_header "[5] Synthetic test — full set (VLM) — ${MODEL_NAME}"
+        run_config "${CONFIG_DIR}/synthetic.yaml" "${SYNTH_RESULTS_DIR}" "synth" || overall_status=$?
+    else
+        log_header "[5] Synthetic test — text-only subset (LLM) — ${MODEL_NAME}"
+        run_config "${CONFIG_DIR}/synthetic_text_only.yaml" "${SYNTH_RESULTS_DIR}" "synth_text" || overall_status=$?
+    fi
 fi
 
 log_header "Driver finished for ${MODEL_NAME} (exit=${overall_status})"

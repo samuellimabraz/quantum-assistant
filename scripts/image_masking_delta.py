@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Join two synthetic evaluation runs (image kept vs masked) and report matched-task deltas (R1.1).
+"""DEPRECATED (ESWA revision): Image-masking matched-task delta was replaced by
+``per_image_type_breakdown.py`` + within-subset base-vs-FT delta. The blanket
+masking confounds image contribution with answerability on samples whose
+text explicitly references the image (e.g. "the circuit shown", "this Bloch
+sphere"). This script remains only as a reference for the earlier plan and
+is no longer invoked by the orchestrator.
+
+----- Original docstring -----
+Join two synthetic evaluation runs (image kept vs masked) and report matched-task deltas (R1.1).
 
 Expects two result JSONs produced by ``evaluate.runners.synthetic.SyntheticDatasetRunner``:
     * condition A: images kept    (``--with-image`` result)

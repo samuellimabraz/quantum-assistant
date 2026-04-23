@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Post-experiment aggregation: stratify QHE-Hard (R2.7), image-masking deltas
-# (R1.1), and build the audit sample (R1.2).
+# Post-experiment aggregation for the ESWA revision:
+#   1. R2.7 — QHE-Hard stratification per model.
+#   2. R1.1 (redesigned) — per-image-type breakdown on synthetic MM subset
+#      and base-vs-FT delta on the same subset.
+#   3. R1.2 — audit sample extraction (stratified; manual review follows).
 # =============================================================================
 
 set -u -o pipefail
@@ -14,12 +17,15 @@ cd "${PROJECT_ROOT}"
 : "${SYNTH_DATASET_PATH:?SYNTH_DATASET_PATH required}"
 
 STRATIFIED_DIR="${PROJECT_ROOT}/outputs/evaluate/stratified"
-MASK_DIR="${PROJECT_ROOT}/outputs/evaluate/image_masking"
-mkdir -p "${STRATIFIED_DIR}" "${MASK_DIR}"
+IMG_TYPE_DIR="${PROJECT_ROOT}/outputs/evaluate/image_type"
+mkdir -p "${STRATIFIED_DIR}" "${IMG_TYPE_DIR}"
 
+# All models whose QHE-Hard results may exist (paper-stack r32-2/base +
+# revision-stack additions). Missing ones are skipped silently.
 ALL_MODELS=(
     "qwen3-vl-base"
     "qwen3-vl-ft-r32-1ep"
+    "qwen3-vl-ft-r32-2"
     "qwen3-vl-ft-r32-2ep"
     "qwen3-vl-ft-r64-1ep"
     "granite-3.3-8b-qiskit"
@@ -27,53 +33,59 @@ ALL_MODELS=(
 )
 VLM_MODELS=(
     "qwen3-vl-base"
+    "qwen3-vl-ft-r32-2"
     "qwen3-vl-ft-r32-1ep"
     "qwen3-vl-ft-r32-2ep"
     "qwen3-vl-ft-r64-1ep"
 )
 
 # 1. QHE-Hard stratification per model (R2.7)
-# Driver writes files as ${MODEL_NAME}_qhe_hard_*.json under
-# outputs/evaluate/qiskit-humaneval-hard/${MODEL_NAME}/
 echo "[post] stratifying QHE-Hard per model"
 for m in "${ALL_MODELS[@]}"; do
     pattern="${PROJECT_ROOT}/outputs/evaluate/qiskit-humaneval-hard/${m}/${m}_qhe_hard_*.json"
-    if ! compgen -G "${pattern}" > /dev/null; then
-        echo "  skip ${m} (no QHE-Hard results matching ${pattern})"
+    alt_pattern="${PROJECT_ROOT}/outputs/evaluate/qiskit-humaneval-hard/${m}_n1_k1_*.json"
+    src=""
+    if compgen -G "${pattern}" > /dev/null; then
+        src="${pattern}"
+    elif compgen -G "${alt_pattern}" > /dev/null; then
+        src="${alt_pattern}"
+    else
+        echo "  skip ${m} (no QHE-Hard results)"
         continue
     fi
     ./.venv/bin/python scripts/stratify_qhe_hard.py \
-        --results "${pattern}" \
+        --results "${src}" \
         --dataset "${QHE_HARD_PATH}" \
         --out "${STRATIFIED_DIR}/${m}.json" \
     || echo "  stratify failed for ${m}"
 done
 
-# 2. Image-masking deltas (R1.1) — VLM only.
-# Driver writes:
-#   ${MODEL_NAME}_synth_mm_kept_*.json
-#   ${MODEL_NAME}_synth_mm_masked_*.json
-echo "[post] computing image-masking deltas"
+# 2. Per-image-type breakdown on synthetic MM subset (R1.1 redesigned)
+echo "[post] per-image-type breakdown on synthetic MM subset"
 for m in "${VLM_MODELS[@]}"; do
-    synth_dir="${PROJECT_ROOT}/outputs/evaluate/synthetic/${m}"
-    with_image="$(ls -1t "${synth_dir}/${m}_synth_mm_kept_"*.json 2>/dev/null | head -1)"
-    masked="$(ls -1t "${synth_dir}/${m}_synth_mm_masked_"*.json 2>/dev/null | head -1)"
-    if [[ -z "${with_image}" || -z "${masked}" ]]; then
-        echo "  skip ${m} (need both mm_kept and mm_masked result files in ${synth_dir})"
+    pattern_a="${PROJECT_ROOT}/outputs/evaluate/synthetic/${m}/${m}_synth_*.json"
+    pattern_b="${PROJECT_ROOT}/outputs/evaluate/synthetic/${m}_n1_k1_*.json"
+    src=""
+    if compgen -G "${pattern_a}" > /dev/null; then
+        src="$(ls -1t ${pattern_a} | head -1)"
+    elif compgen -G "${pattern_b}" > /dev/null; then
+        src="$(ls -1t ${pattern_b} | head -1)"
+    else
+        echo "  skip ${m} (no synthetic results)"
         continue
     fi
-    ./.venv/bin/python scripts/image_masking_delta.py \
-        --with-image "${with_image}" \
-        --masked     "${masked}" \
-        --model      "${m}" \
-        --out        "${MASK_DIR}/${m}.json" \
-    || echo "  delta failed for ${m}"
+    ./.venv/bin/python scripts/per_image_type_breakdown.py \
+        --results "${src}" \
+        --dataset "${SYNTH_DATASET_PATH}" \
+        --model   "${m}" \
+        --out     "${IMG_TYPE_DIR}/${m}.json" \
+    || echo "  image_type breakdown failed for ${m}"
 done
 
-# Aggregate image-masking summary across models.
+# Aggregate image-type summary across models (incl. within-MM base-vs-FT delta).
 ./.venv/bin/python - <<'PY'
-import glob, json, pathlib
-root = pathlib.Path("outputs/evaluate/image_masking")
+import json, pathlib
+root = pathlib.Path("outputs/evaluate/image_type")
 summary = {}
 for p in sorted(root.glob("*.json")):
     if p.name == "summary.json":
@@ -81,15 +93,15 @@ for p in sorted(root.glob("*.json")):
     with open(p) as f:
         data = json.load(f)
     summary[data.get("model", p.stem)] = {
-        "matched_samples": data.get("matched_samples"),
-        "overall": data.get("overall"),
-        "by_question_type": data.get("by_question_type"),
+        "multimodal_samples": data.get("multimodal_samples"),
+        "overall_mm_pass@1": data.get("overall_mm_pass@1"),
+        "by_image_type": data.get("by_image_type"),
     }
 (root / "summary.json").write_text(json.dumps(summary, indent=2))
 print("wrote", root / "summary.json")
 PY
 
-# 3. Audit set extraction (R1.2) — no GPU
+# 3. Audit set extraction (R1.2) — no GPU, author reviews manually.
 echo "[post] extracting audit set"
 ./.venv/bin/python scripts/sample_audit_set.py \
     --dataset "${SYNTH_DATASET_PATH}" \
@@ -97,6 +109,7 @@ echo "[post] extracting audit set"
     --per-cell 25 \
     --seed 42 \
     --out /workspace/paper/review_data/audit_set.jsonl \
-    --images-dir /workspace/paper/review_data/audit_images
+    --images-dir /workspace/paper/review_data/audit_images \
+|| echo "  audit extraction failed"
 
 echo "[post] done"
