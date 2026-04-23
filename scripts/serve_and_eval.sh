@@ -80,6 +80,19 @@ export MODEL_BASE_URL="http://localhost:${VLLM_PORT}/v1"
 export API_KEY="${API_KEY:-EMPTY}"
 export MODEL_NAME
 
+# Clear vLLM's torch.compile cache before each serve. Persisted compiled graphs
+# from a prior model with the same architecture hash can produce
+# "CUDA error: illegal memory access" in _dummy_run when the stale shape
+# metadata is reloaded into a fresh engine process. Recompile cost is ~5-10 s.
+if [[ -d /root/.cache/vllm/torch_compile_cache ]]; then
+    echo "[serve_and_eval] clearing /root/.cache/vllm/torch_compile_cache"
+    rm -rf /root/.cache/vllm/torch_compile_cache
+fi
+
+# Clear stale /dev/shm segments left by killed vLLM processes (zmq sockets,
+# shared CUDA tensors). Safe: only removes entries older than a minute.
+find /dev/shm -maxdepth 1 -mmin +1 \( -name 'vllm_*' -o -name 'sem.loky-*' -o -name 'psm_*' \) -print -delete 2>/dev/null || true
+
 vllm_log="${VLLM_LOG_DIR}/${MODEL_NAME}.log"
 
 declare -a vllm_cmd=(
@@ -90,6 +103,11 @@ declare -a vllm_cmd=(
     --max-model-len "${MAX_MODEL_LEN}"
     --gpu-memory-utilization "${GPU_MEM_UTIL}"
     --trust-remote-code
+    # Disable video in the multimodal profile run. Our dataset has no video
+    # samples; keeping it on triggers a KeyError in vLLM 0.11.0's dummy-video
+    # preprocessing for InternVL3_5-8B (and potentially other VLMs). The flag
+    # is a no-op for text-only LLMs and image-only VLMs.
+    --limit-mm-per-prompt '{"image":1,"video":0}'
 )
 
 if [[ -n "${VLLM_EXTRA_ARGS}" ]]; then
@@ -98,6 +116,10 @@ if [[ -n "${VLLM_EXTRA_ARGS}" ]]; then
 fi
 
 printf '[serve_and_eval] starting vllm: %s\n' "${vllm_cmd[*]}"
+# Blackwell (SM 12.x) + torch-cu128 cannot JIT flashinfer's top-k/top-p sampler
+# (needs CUDA >= 12.9). Forcing the torch-native sampler keeps the attention
+# path on Flash Attention and is numerically equivalent at greedy.
+export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 "${vllm_cmd[@]}" >"${vllm_log}" 2>&1 &
 vllm_pid=$!
 

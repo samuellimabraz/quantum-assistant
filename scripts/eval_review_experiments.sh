@@ -67,15 +67,19 @@ log_header() {
 }
 
 # Pin the evaluate CLI's output path so each benchmark/condition lands at a
-# distinct, resumable file (the CLI's auto_filename scheme does not
-# disambiguate between conditions sharing the same model name, e.g. the two
-# synthetic image-masking runs).
+# distinct, resumable file, and apply per-model overrides (prompt policy,
+# concurrency) driven by the following environment variables:
+#
+#   PROMPT_MODE             "finetune" | "null" | "default" (default: keep base config)
+#   FINETUNE_SYSTEM_PROMPT  inlined prompt text (used when PROMPT_MODE=finetune;
+#                           defaults to src/evaluate/config/finetune_system_prompt.txt)
+#   EVAL_MAX_CONCURRENT         override metrics.max_concurrent
+#   EVAL_EXEC_MAX_CONCURRENT    override metrics.execution_max_concurrent
 #
 # Usage: run_config <base_config_path> <output_dir> <slug>
 #   - base_config_path: shipped YAML, unchanged
 #   - output_dir: where the results file should be written
-#   - slug: short tag added to the filename (e.g. "qhe", "qhe_passk",
-#           "synth", "synth_mm_kept", "synth_mm_masked")
+#   - slug: short tag added to the filename (e.g. "qhe", "qhe_passk", "synth")
 run_config() {
     local base_config="$1" target_dir="$2" slug="$3"
     mkdir -p "${target_dir}"
@@ -84,18 +88,61 @@ run_config() {
     local result_file="${target_dir}/${MODEL_NAME}_${slug}_${stamp}.json"
     local tmp_config
     tmp_config="$(mktemp --suffix=.yaml)"
-    # Append output block override. The shipped config's `output:` block
-    # already sets auto_filename; we switch to a fixed path by adding
-    # `auto_filename: false` and a literal `results_file` at the end.
-    cat "${base_config}" > "${tmp_config}"
-    cat >> "${tmp_config}" <<EOF_OUT
 
-# --- override injected by eval_review_experiments.sh ---
-output:
-  results_file: "${result_file}"
-  results_dir: "${target_dir}"
-  auto_filename: false
-EOF_OUT
+    # Build the effective config via a small Python merger. YAML duplicate-key
+    # tricks lose nested fields when PyYAML overwrites whole blocks; deep-merge
+    # avoids that.
+    BASE_CONFIG="${base_config}" TMP_CONFIG="${tmp_config}" \
+    RESULT_FILE="${result_file}" TARGET_DIR="${target_dir}" \
+    "${PYTHON}" - <<'PY'
+import os, yaml
+
+src = os.environ["BASE_CONFIG"]
+dst = os.environ["TMP_CONFIG"]
+result_file = os.environ["RESULT_FILE"]
+target_dir = os.environ["TARGET_DIR"]
+
+with open(src) as f:
+    cfg = yaml.safe_load(f)
+
+cfg.setdefault("output", {})
+cfg["output"]["results_file"] = result_file
+cfg["output"]["results_dir"] = target_dir
+cfg["output"]["auto_filename"] = False
+
+m = cfg.setdefault("metrics", {})
+mode = os.environ.get("PROMPT_MODE", "default")
+if mode == "finetune":
+    prompt = os.environ.get("FINETUNE_SYSTEM_PROMPT", "").strip()
+    if not prompt:
+        prompt_file = os.environ.get(
+            "FINETUNE_SYSTEM_PROMPT_FILE",
+            os.path.join(os.path.dirname(src), "finetune_system_prompt.txt"),
+        )
+        with open(prompt_file) as pf:
+            prompt = pf.read().strip()
+    m["system_prompt_type"] = "custom"
+    m["custom_system_prompt"] = prompt
+elif mode == "null":
+    m["system_prompt_type"] = None
+    m["custom_system_prompt"] = None
+# else: "default" — leave whatever the base config specifies
+
+if os.environ.get("EVAL_MAX_CONCURRENT"):
+    m["max_concurrent"] = int(os.environ["EVAL_MAX_CONCURRENT"])
+if os.environ.get("EVAL_EXEC_MAX_CONCURRENT"):
+    m["execution_max_concurrent"] = int(os.environ["EVAL_EXEC_MAX_CONCURRENT"])
+
+with open(dst, "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
+PY
+    local merge_status=$?
+    if [[ "${merge_status}" -ne 0 ]]; then
+        echo "[eval_review] config merge failed for ${slug}" >&2
+        rm -f "${tmp_config}"
+        return "${merge_status}"
+    fi
+
     "${PYTHON}" -m evaluate.cli run --config "${tmp_config}"
     local status=$?
     rm -f "${tmp_config}"
