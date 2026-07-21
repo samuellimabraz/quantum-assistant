@@ -1,0 +1,40 @@
+# Synthetic dataset — image-masking ablation (R1.1, condition B).
+#
+# Runs the VLM against the multimodal subset of the test split but drops the
+# image at inference time, so the same model is evaluated on the same prompts
+# with and without the image. Pair with synthetic_multimodal_only.yaml to
+# obtain condition A (image kept) and compute matched-task deltas via
+# scripts/image_masking_delta.py.
+
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 4096
+  temperature: 0.0
+  timeout: 300.0
+  is_vlm: true
+
+dataset:
+  type: "synthetic"
+  path: "${SYNTH_DATASET_PATH}"
+  images_dir: null
+  split: "test"
+  max_samples: null
+  text_only: false
+  multimodal_only: true
+  mask_images: true
+
+metrics:
+  num_samples_per_task: 1
+  k_values: [1]
+  execution_timeout: 60
+  max_concurrent: 16
+  system_prompt_type: "qiskit_humaneval"
+  custom_system_prompt: null
+  verify_canonical: false
+
+output:
+  results_file: null
+  results_dir: "outputs/evaluate/synthetic"
+  auto_filename: true

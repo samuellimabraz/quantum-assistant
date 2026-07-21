@@ -17,7 +17,7 @@ model:
 # Dataset Configuration
 dataset:
   type: "qiskit_humaneval"
-  path: "/Users/samuel/Developer/avante/unifei/tcc/qiskit-human-eval/dataset/dataset_qiskit_test_human_eval_hard.json"
+  path: "${QHE_HARD_PATH}"
   dataset_variant: "hard"
   images_dir: null
   max_samples: null

@@ -71,23 +71,76 @@ quantum-assistant/
 
 ### Installation
 
+All dependencies are pinned to exact versions for full reproducibility of the
+reported evaluation results. See the [Reproducibility](#reproducibility)
+section below for details.
+
 ```bash
 # Clone repository
 git clone https://github.com/samuellimabraz/quantum-assistant.git
 cd quantum-assistant
 
-# Install with uv (recommended)
-uv sync
+# Install with uv (recommended) — reproduces the exact locked environment
+uv sync --frozen
 
-# Or with pip
-pip install -e .
+# Or with pip, from the fully-pinned requirements file
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 **Optional GPU dependencies for fine-tuning:**
 
 ```bash
-uv sync --package finetune --extra gpu
+uv sync --frozen --package finetune --extra gpu
 ```
+
+### Reproducibility
+
+The evaluation pipeline is pinned end-to-end so the numbers reported in the
+paper can be reproduced exactly. Quantum libraries (Qiskit, Qiskit Aer, the
+`qiskit-addon-*` family) iterate fast and regularly introduce API changes that
+affect unit-test execution and therefore `Pass@1`, so any reproduction run must
+match the versions below.
+
+**What is pinned:**
+
+- **Python**: `3.13.7` — pinned via `.python-version` (uv and pyenv both
+  respect this file). `pyproject.toml` restricts the interpreter to the
+  `3.13.*` series.
+- **Direct dependencies**: all `==X.Y.Z` in `pyproject.toml` and
+  `src/finetune/pyproject.toml`. No ranges.
+- **Transitive dependencies**: locked in `uv.lock` (source of truth) and
+  mirrored in `requirements.txt` (pip-compatible export).
+- **Evaluation runtime**: Qiskit `2.2.3`, Qiskit Aer `0.17.2`,
+  Qiskit IBM Runtime `0.43.1`, PyTorch `2.8.0`.
+
+**To reproduce the evaluation environment:**
+
+```bash
+# With uv (recommended)
+uv sync --frozen
+
+# With pip
+pip install -r requirements.txt
+pip install -e . --no-deps
+```
+
+Both paths produce the same resolved versions. `requirements.txt` is generated
+from `uv.lock` via `uv export --frozen --no-hashes --no-editable
+--no-emit-workspace` and should be regenerated whenever the lockfile changes:
+
+```bash
+uv export --frozen --no-hashes --no-editable --no-emit-workspace \
+    --format requirements-txt > requirements.txt
+```
+
+**Upgrading dependencies.** If you intentionally
+want to upgrade, edit the exact version in `pyproject.toml`, run `uv lock` to
+refresh the lockfile, re-export `requirements.txt`, and re-run the full
+evaluation. Do not upgrade Qiskit without re-validating the benchmark numbers —
+a minor release is enough to change a non-trivial number of `Pass@1` outcomes.
 
 ### Environment Setup
 

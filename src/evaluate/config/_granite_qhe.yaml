@@ -1,0 +1,34 @@
+# Temp config: granite-3.3-8b-qiskit on QHE with its own default system prompt.
+# The granite HF model card invokes the model with no system prompt, relying
+# on the base tokenizer's chat template. For fairness across Qiskit-specialized
+# models we report the better of (shared qiskit_humaneval prompt, own prompt).
+
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 4096
+  temperature: 0.0
+  timeout: 300.0
+  is_vlm: false
+
+dataset:
+  type: "qiskit_humaneval"
+  path: "${QHE_PATH}"
+  dataset_variant: "normal"
+  images_dir: null
+  max_samples: null
+
+metrics:
+  num_samples_per_task: 1
+  k_values: [1]
+  execution_timeout: 60
+  max_concurrent: 20
+  system_prompt_type: null
+  custom_system_prompt: null
+  verify_canonical: false
+
+output:
+  results_file: null
+  results_dir: "outputs/evaluate/qiskit-humaneval"
+  auto_filename: true
