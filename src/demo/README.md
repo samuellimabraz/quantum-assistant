@@ -2,6 +2,8 @@
 
 Interactive web interface for the Quantum Assistant - a multimodal Vision-Language Model specialized for quantum computing with Qiskit.
 
+[![Paper](https://img.shields.io/badge/Paper-ESWA%202026-00A4A6)](https://doi.org/10.1016/j.eswa.2026.133931)
+[![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.eswa.2026.133931-blue)](https://doi.org/10.1016/j.eswa.2026.133931)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Dataset](https://img.shields.io/badge/🤗%20Dataset-Quantum%20Assistant-yellow)](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
 [![Models](https://img.shields.io/badge/🤗%20Models-Collection-orange)](https://huggingface.co/collections/samuellimabraz/quantum-assistant)
@@ -213,6 +215,21 @@ DEMO_MODEL_NAME=samuellimabraz/qwen3-vl-8b-quantum-r32-1ep
 **Samuel Lima Braz**  
 Universidade Federal de Itajubá (UNIFEI)  
 Advisor: Prof. João Paulo Reus Rodrigues Leite
+
+## Citation
+
+```bibtex
+@article{braz2026quantumassistant,
+  title     = {Quantum Assistant: Specialization of Multimodal Vision-Language Models for Quantum Computing},
+  author    = {Braz, Samuel Lima and Leite, Jo{\~a}o Paulo Reus Rodrigues},
+  journal   = {Expert Systems with Applications},
+  year      = {2026},
+  issn      = {0957-4174},
+  doi       = {10.1016/j.eswa.2026.133931},
+  url       = {https://doi.org/10.1016/j.eswa.2026.133931},
+  publisher = {Elsevier}
+}
+```
 
 ## License
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { Github, Database, Boxes, ExternalLink, MessageSquare, Code } from 'lucide-react';
+import { Github, Database, Boxes, ExternalLink, MessageSquare, Code, FileText } from 'lucide-react';
 import { clsx } from 'clsx';
 import { PROJECT_CONFIG, LINKS } from '@/config/constants';
 import { WarmupIndicator } from '@/components/Chat/WarmupIndicator';
@@ -103,6 +103,12 @@ export function Header({ mode = 'chat', onModeChange }: HeaderProps) {
 
           {/* Badges - far right */}
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0 sm:ml-auto">
+            <Badge
+              href={LINKS.paper}
+              icon={<FileText className="w-3.5 h-3.5" />}
+              label="Paper"
+              variant="highlight"
+            />
             <Badge
               href={LINKS.github}
               icon={<Github className="w-3.5 h-3.5" />}

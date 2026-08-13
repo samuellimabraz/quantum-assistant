@@ -14,6 +14,7 @@ export const LINKS = {
   github: 'https://github.com/samuellimabraz/quantum-assistant',
   dataset: 'https://huggingface.co/datasets/samuellimabraz/quantum-assistant',
   models: 'https://huggingface.co/collections/samuellimabraz/quantum-assistant',
+  paper: 'https://doi.org/10.1016/j.eswa.2026.133931',
   qiskit: 'https://qiskit.org/',
 } as const;
 
