@@ -2,10 +2,15 @@
 
 Specializing multimodal vision-language models for quantum computing with Qiskit through synthetic data generation, efficient fine-tuning, and evaluation.
 
+[![Paper](https://img.shields.io/badge/Paper-ESWA%202026-00A4A6)](https://doi.org/10.1016/j.eswa.2026.133931)
+[![DOI](https://img.shields.io/badge/DOI-10.1016%2Fj.eswa.2026.133931-blue)](https://doi.org/10.1016/j.eswa.2026.133931)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Dataset](https://img.shields.io/badge/🤗%20Dataset-Quantum%20Assistant-yellow)](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
 [![Models](https://img.shields.io/badge/🤗%20Models-Collection-orange)](https://huggingface.co/collections/samuellimabraz/quantum-assistant)
+[![Demo](https://img.shields.io/badge/🤗%20Demo-Space-blueviolet)](https://huggingface.co/spaces/samuellimabraz/quantum-assistant)
 [![Qiskit](https://img.shields.io/badge/Qiskit-2.0-6929C4)](https://qiskit.org/)
+
+**Paper:** Samuel Lima Braz and João Paulo Reus Rodrigues Leite. *Quantum Assistant: Specialization of Multimodal Vision-Language Models for Quantum Computing.* [Expert Systems with Applications](https://www.sciencedirect.com/journal/expert-systems-with-applications) (2026). [doi:10.1016/j.eswa.2026.133931](https://doi.org/10.1016/j.eswa.2026.133931)
 
 ## Overview
 
@@ -71,23 +76,76 @@ quantum-assistant/
 
 ### Installation
 
+All dependencies are pinned to exact versions for full reproducibility of the
+reported evaluation results. See the [Reproducibility](#reproducibility)
+section below for details.
+
 ```bash
 # Clone repository
 git clone https://github.com/samuellimabraz/quantum-assistant.git
 cd quantum-assistant
 
-# Install with uv (recommended)
-uv sync
+# Install with uv (recommended) — reproduces the exact locked environment
+uv sync --frozen
 
-# Or with pip
-pip install -e .
+# Or with pip, from the fully-pinned requirements file
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 **Optional GPU dependencies for fine-tuning:**
 
 ```bash
-uv sync --package finetune --extra gpu
+uv sync --frozen --package finetune --extra gpu
 ```
+
+### Reproducibility
+
+The evaluation pipeline is pinned end-to-end so the numbers reported in the
+paper can be reproduced exactly. Quantum libraries (Qiskit, Qiskit Aer, the
+`qiskit-addon-*` family) iterate fast and regularly introduce API changes that
+affect unit-test execution and therefore `Pass@1`, so any reproduction run must
+match the versions below.
+
+**What is pinned:**
+
+- **Python**: `3.13.7` — pinned via `.python-version` (uv and pyenv both
+  respect this file). `pyproject.toml` restricts the interpreter to the
+  `3.13.*` series.
+- **Direct dependencies**: all `==X.Y.Z` in `pyproject.toml` and
+  `src/finetune/pyproject.toml`. No ranges.
+- **Transitive dependencies**: locked in `uv.lock` (source of truth) and
+  mirrored in `requirements.txt` (pip-compatible export).
+- **Evaluation runtime**: Qiskit `2.2.3`, Qiskit Aer `0.17.2`,
+  Qiskit IBM Runtime `0.43.1`, PyTorch `2.8.0`.
+
+**To reproduce the evaluation environment:**
+
+```bash
+# With uv (recommended)
+uv sync --frozen
+
+# With pip
+pip install -r requirements.txt
+pip install -e . --no-deps
+```
+
+Both paths produce the same resolved versions. `requirements.txt` is generated
+from `uv.lock` via `uv export --frozen --no-hashes --no-editable
+--no-emit-workspace` and should be regenerated whenever the lockfile changes:
+
+```bash
+uv export --frozen --no-hashes --no-editable --no-emit-workspace \
+    --format requirements-txt > requirements.txt
+```
+
+**Upgrading dependencies.** If you intentionally
+want to upgrade, edit the exact version in `pyproject.toml`, run `uv lock` to
+refresh the lockfile, re-export `requirements.txt`, and re-run the full
+evaluation. Do not upgrade Qiskit without re-validating the benchmark numbers —
+a minor release is enough to change a non-trivial number of `Pass@1` outcomes.
 
 ### Environment Setup
 
@@ -283,15 +341,18 @@ Baseline: Qwen3-VL-8B-Instruct (32.45% / 32.29%)
 
 ## Citation
 
-If you use this work in your research, please cite:
+If you use this software, dataset, or models, please cite:
 
 ```bibtex
-@misc{braz2025quantumassistant,
-  title={Quantum Assistant: Especialização de Modelos Multimodais para Computação Quântica},
-  author={Braz, Samuel Lima and Leite, João Paulo Reus Rodrigues},
-  year={2025},
-  institution={Universidade Federal de Itajubá (UNIFEI)},
-  url={https://github.com/samuellimabraz/quantum-assistant}
+@article{braz2026quantumassistant,
+  title     = {Quantum Assistant: Specialization of Multimodal Vision-Language Models for Quantum Computing},
+  author    = {Braz, Samuel Lima and Leite, Jo{\~a}o Paulo Reus Rodrigues},
+  journal   = {Expert Systems with Applications},
+  year      = {2026},
+  issn      = {0957-4174},
+  doi       = {10.1016/j.eswa.2026.133931},
+  url       = {https://doi.org/10.1016/j.eswa.2026.133931},
+  publisher = {Elsevier}
 }
 ```
 

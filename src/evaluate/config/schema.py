@@ -43,6 +43,14 @@ class DatasetConfig(BaseModel):
     images_dir: Path | None = Field(
         default=None, description="Directory containing images (for synthetic multimodal)"
     )
+
+    @field_validator("path", "images_dir", mode="before")
+    @classmethod
+    def resolve_path_env_var(cls, v):
+        """Resolve ``${VAR}`` placeholders inside dataset paths."""
+        if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
+            return os.getenv(v[2:-1], "")
+        return v
     max_samples: int | None = Field(default=None, ge=1, description="Limit number of samples")
     # Qiskit HumanEval specific
     dataset_variant: str | None = Field(
@@ -57,6 +65,14 @@ class DatasetConfig(BaseModel):
     text_only: bool = Field(
         default=False,
         description="Filter to only text-only samples (no images). For synthetic datasets with LLMs.",
+    )
+    multimodal_only: bool = Field(
+        default=False,
+        description="Filter to only multimodal samples (image != None). For matched-task ablations.",
+    )
+    mask_images: bool = Field(
+        default=False,
+        description="Run VLM with the text-only code path even when a sample has an image. Used for the image-contribution ablation (R1.1).",
     )
 
 
@@ -73,6 +89,18 @@ class MetricsConfig(BaseModel):
     # Generation concurrency
     max_concurrent: int = Field(
         default=10, ge=1, le=100, description="Maximum concurrent API requests"
+    )
+
+    # Code execution concurrency (parallel subprocess pool for pass@k evaluation)
+    execution_max_concurrent: int = Field(
+        default=16,
+        ge=1,
+        le=128,
+        description=(
+            "Maximum concurrent code-execution subprocesses. Results are "
+            "behavior-preserving vs. the sequential path; use 1 to force "
+            "the original serial execution."
+        ),
     )
 
     # Text evaluation (for synthetic QA)

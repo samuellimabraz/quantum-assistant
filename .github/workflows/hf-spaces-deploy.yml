@@ -66,7 +66,9 @@ jobs:
             - samuellimabraz/Qwen3-VL-8B-rslora-r32-2
           ---
 
-          Interactive demo for **Quantum Assistant** - A Multimodal Vision Language Model specialized for Quantum Computing with Qiskit.
+          Interactive demo for **Quantum Assistant** — a multimodal vision-language model specialized for quantum computing with Qiskit.
+
+          **Paper:** Samuel Lima Braz and João Paulo Reus Rodrigues Leite, *Expert Systems with Applications* (2026). [doi:10.1016/j.eswa.2026.133931](https://doi.org/10.1016/j.eswa.2026.133931)
 
           ## Features
 
@@ -77,6 +79,7 @@ jobs:
 
           ## Resources
 
+          - 📄 [Paper](https://doi.org/10.1016/j.eswa.2026.133931)
           - 📦 [Dataset](https://huggingface.co/datasets/samuellimabraz/quantum-assistant)
           - 🤖 [Models](https://huggingface.co/collections/samuellimabraz/quantum-assistant)
           - 💻 [GitHub](https://github.com/samuellimabraz/quantum-assistant)

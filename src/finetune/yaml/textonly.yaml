@@ -1,0 +1,133 @@
+# =============================================================================
+# R2.5 text-only training control
+# Self-contained config (consumed directly by scripts/tune.sh).
+#
+# Matches the `rslora_r32` experiment in experiments.yaml exactly (rank 32,
+# rsLoRA, freeze_vit, 2 epochs, dropout 0.15, lr 2e-4, batch 16x2), with the
+# only change being the training data: text-only subset of
+# samuellimabraz/quantum-assistant (produced by filtering the JSONL written by
+# `finetune prepare`).
+#
+# Not registered in experiments.yaml because the experiment.sh override flow
+# appends base.yaml values after CLI overrides (see swift/cli/main.py
+# `prepare_config_args`), so dataset/val_dataset overrides would be ignored.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Model / run identity
+# -----------------------------------------------------------------------------
+model: Qwen/Qwen3-VL-8B-Instruct
+model_author: samuellimabraz
+model_name: Qwen3-VL-8B-rslora-r32-2-textonly
+run_name: Qwen3-VL-8B-rslora-r32-2-textonly
+output_dir: ./outputs/train/exp-rslora-r32-2-textonly
+hub_model_id: samuellimabraz/Qwen3-VL-8B-rslora-r32-2-textonly
+
+system: |
+  You are a quantum computing expert assistant specializing in Qiskit.
+  Provide accurate, clear, and well-structured responses about quantum computing concepts,
+  algorithms, and code implementation. Use Qiskit 2.0 best practices.
+
+# -----------------------------------------------------------------------------
+# Dataset (text-only subset)
+# -----------------------------------------------------------------------------
+dataset:
+  - ./outputs/quantum-assistant-textonly/train.jsonl
+val_dataset:
+  - ./outputs/quantum-assistant-textonly/validation.jsonl
+load_from_cache_file: true
+data_seed: 42
+
+# -----------------------------------------------------------------------------
+# Precision & attention
+# -----------------------------------------------------------------------------
+torch_dtype: bfloat16
+bf16: true
+fp16: false
+attn_impl: flash_attn
+
+# -----------------------------------------------------------------------------
+# Tokenization
+# -----------------------------------------------------------------------------
+padding_side: left
+padding_free: true
+lazy_tokenize: true
+max_new_tokens: 4096
+max_pixels: 1003520
+
+# -----------------------------------------------------------------------------
+# LoRA (matches experiments.yaml:rslora_r32)
+# -----------------------------------------------------------------------------
+train_type: lora
+lora_rank: 32
+lora_alpha: 64
+lora_dropout: 0.15
+target_modules: all-linear
+init_weights: "true"
+use_rslora: true
+use_dora: false
+freeze_llm: false
+freeze_vit: true
+freeze_aligner: false
+
+# -----------------------------------------------------------------------------
+# Optimization
+# -----------------------------------------------------------------------------
+learning_rate: 2e-4
+lr_scheduler_type: cosine
+optim: adamw_torch
+weight_decay: 0.1
+
+per_device_train_batch_size: 16
+gradient_accumulation_steps: 2
+torch_empty_cache_steps: 50
+
+num_train_epochs: 2
+warmup_steps: 20
+warmup_ratio: 0.1
+
+gradient_checkpointing: true
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+per_device_eval_batch_size: 8
+eval_accumulation_steps: 4
+eval_strategy: steps
+eval_steps: 20
+metric_for_best_model: eval_loss
+load_best_model_at_end: true
+fp16_full_eval: true
+
+# -----------------------------------------------------------------------------
+# Saving
+# -----------------------------------------------------------------------------
+save_strategy: steps
+save_steps: 40
+save_total_limit: 3
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging_first_step: true
+logging_steps: 5
+logging_strategy: steps
+report_to:
+  - wandb
+  - tensorboard
+
+project: quantum-assistant
+
+# -----------------------------------------------------------------------------
+# Data loading
+# -----------------------------------------------------------------------------
+dataloader_num_workers: 8
+dataset_num_proc: 8
+remove_unused_columns: false
+
+# -----------------------------------------------------------------------------
+# HuggingFace Hub
+# -----------------------------------------------------------------------------
+use_hf: true
+push_to_hub: false
+hub_private_repo: true

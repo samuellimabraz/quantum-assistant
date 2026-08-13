@@ -88,6 +88,52 @@ class CodeExecutor:
         """
         return asyncio.run(self.execute_async(code, test_code, entry_point))
 
+    async def execute_many_async(
+        self,
+        items: list[tuple[str, str | None, str | None]],
+        max_concurrent: int = 16,
+        progress_callback=None,
+    ) -> list[ExecutionResult]:
+        """Execute many (code, test_code, entry_point) triples concurrently.
+
+        Each item runs through the same ``execute_async`` path used by the
+        sequential ``execute`` wrapper, so per-item behavior is unchanged.
+        A semaphore bounds the number of simultaneous subprocesses.
+
+        Args:
+            items: List of ``(code, test_code, entry_point)`` triples.
+            max_concurrent: Maximum concurrent subprocesses.
+            progress_callback: Optional ``fn(completed: int)`` called after
+                each item finishes (invoked under an asyncio lock so the
+                callback sees monotonically increasing counts).
+
+        Returns:
+            List of ``ExecutionResult`` in the same order as ``items``.
+        """
+        if not items:
+            return []
+
+        semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
+        results: list[ExecutionResult | None] = [None] * len(items)
+        completed = [0]
+        lock = asyncio.Lock()
+
+        async def _run(idx: int, triple: tuple[str, str | None, str | None]) -> None:
+            code, test_code, entry_point = triple
+            async with semaphore:
+                try:
+                    res = await self.execute_async(code, test_code, entry_point)
+                except Exception as exc:  # defensive: keep the same shape as execute
+                    res = ExecutionResult(success=False, error=str(exc))
+            async with lock:
+                results[idx] = res
+                completed[0] += 1
+                if progress_callback is not None:
+                    progress_callback(completed[0])
+
+        await asyncio.gather(*[_run(i, t) for i, t in enumerate(items)])
+        return [r if r is not None else ExecutionResult(success=False, error="missing") for r in results]
+
     async def execute_async(
         self,
         code: str,

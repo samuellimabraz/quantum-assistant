@@ -40,6 +40,8 @@ outputs/
 
 # Config
 .env
+.env.local
+.env*.local
 
 # Logs
 *.log

@@ -1,0 +1,30 @@
+# Temp config: granite-3.3-8b-qiskit on QHE-Hard with its own default (no) prompt.
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 4096
+  temperature: 0.0
+  timeout: 300.0
+  is_vlm: false
+
+dataset:
+  type: "qiskit_humaneval"
+  path: "${QHE_HARD_PATH}"
+  dataset_variant: "hard"
+  images_dir: null
+  max_samples: null
+
+metrics:
+  num_samples_per_task: 1
+  k_values: [1]
+  execution_timeout: 60
+  max_concurrent: 20
+  system_prompt_type: null
+  custom_system_prompt: null
+  verify_canonical: false
+
+output:
+  results_file: null
+  results_dir: "outputs/evaluate/qiskit-humaneval-hard"
+  auto_filename: true

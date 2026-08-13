@@ -1,0 +1,71 @@
+# Citation metadata for this repository.
+# GitHub renders this file as "Cite this repository" on the default branch.
+# Schema: Citation File Format 1.2.0
+# https://github.com/citation-file-format/citation-file-format
+#
+# Bibliographic source: Elsevier article tracking (ESWA_133931), 13 Aug 2026.
+# DOI resolves to https://linkinghub.elsevier.com/retrieve/pii/S0957417426028381
+# Volume, issue, and page range are not yet assigned ("Will appear soon").
+# Update those fields when Elsevier publishes the issue of record.
+
+cff-version: 1.2.0
+message: If you use this software, dataset, or models, please cite the article below.
+type: software
+title: Quantum Assistant
+abstract: >-
+  Specialization of multimodal vision-language models for quantum computing
+  with Qiskit, including a synthetic data-generation pipeline, a public
+  multimodal dataset, and parameter-efficient fine-tuning experiments.
+authors:
+  - family-names: Braz
+    given-names: Samuel Lima
+    orcid: https://orcid.org/0009-0001-8308-710X
+    email: samuel.limabraz@unifei.edu.br
+    affiliation: >-
+      Institute of Systems Engineering and Information Technologies,
+      Federal University of Itajubá (UNIFEI)
+  - family-names: Leite
+    given-names: João Paulo Reus Rodrigues
+    orcid: https://orcid.org/0000-0002-7929-8545
+    email: joaopaulo@unifei.edu.br
+    affiliation: >-
+      Institute of Systems Engineering and Information Technologies,
+      Federal University of Itajubá (UNIFEI)
+license: Apache-2.0
+repository-code: https://github.com/samuellimabraz/quantum-assistant
+url: https://github.com/samuellimabraz/quantum-assistant
+keywords:
+  - parameter-efficient fine-tuning
+  - quantum computing
+  - code generation
+  - vision-language models
+  - Qiskit
+  - low-rank adaptation
+preferred-citation:
+  type: article
+  title: "Quantum Assistant: Specialization of Multimodal Vision-Language Models for Quantum Computing"
+  authors:
+    - family-names: Braz
+      given-names: Samuel Lima
+      orcid: https://orcid.org/0009-0001-8308-710X
+    - family-names: Leite
+      given-names: João Paulo Reus Rodrigues
+      orcid: https://orcid.org/0000-0002-7929-8545
+  journal: Expert Systems with Applications
+  year: 2026
+  month: 8
+  issn: "0957-4174"
+  doi: 10.1016/j.eswa.2026.133931
+  url: https://doi.org/10.1016/j.eswa.2026.133931
+  publisher:
+    name: Elsevier
+  identifiers:
+    - type: doi
+      value: 10.1016/j.eswa.2026.133931
+      description: Article DOI
+    - type: other
+      value: S0957417426028381
+      description: Elsevier PII
+    - type: other
+      value: ESWA_133931
+      description: Elsevier article reference

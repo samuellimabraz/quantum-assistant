@@ -381,13 +381,16 @@ Released under {self.config.license} license.
 ## Citation
 
 ```bibtex
-@misc{{{self.config.name.replace('-', '_')},
-  title = {{{self.config.name}}},
-  author = {{Samuel Lima Braz}},
-  year = {{2025}},
-  publisher = {{HuggingFace}},
-  url = {{https://huggingface.co/datasets/{self.config.hub_id or 'username/dataset'}}}
-}}
+@article{braz2026quantumassistant,
+  title     = {{Quantum Assistant: Specialization of Multimodal Vision-Language Models for Quantum Computing}},
+  author    = {Braz, Samuel Lima and Leite, Jo{\~a}o Paulo Reus Rodrigues},
+  journal   = {Expert Systems with Applications},
+  year      = {2026},
+  issn      = {0957-4174},
+  doi       = {10.1016/j.eswa.2026.133931},
+  url       = {https://doi.org/10.1016/j.eswa.2026.133931},
+  publisher = {Elsevier}
+}
 ```
 """
 

@@ -1,0 +1,34 @@
+# Synthetic dataset — text-only subset for LLM baselines (e.g. granite/qiskit).
+
+model:
+  base_url: "${MODEL_BASE_URL}"
+  api_key: "${API_KEY}"
+  model_name: "${MODEL_NAME}"
+  max_tokens: 4096
+  temperature: 0.0
+  timeout: 300.0
+  is_vlm: false
+
+dataset:
+  type: "synthetic"
+  path: "${SYNTH_DATASET_PATH}"
+  images_dir: null
+  split: "test"
+  max_samples: null
+  text_only: true
+  multimodal_only: false
+  mask_images: false
+
+metrics:
+  num_samples_per_task: 1
+  k_values: [1]
+  execution_timeout: 60
+  max_concurrent: 20
+  system_prompt_type: "qiskit_humaneval"
+  custom_system_prompt: null
+  verify_canonical: false
+
+output:
+  results_file: null
+  results_dir: "outputs/evaluate/synthetic"
+  auto_filename: true

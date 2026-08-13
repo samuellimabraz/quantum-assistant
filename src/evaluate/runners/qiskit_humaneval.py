@@ -75,6 +75,7 @@ class QiskitHumanEvalRunner:
         timeout: int = 30,
         max_concurrent: int = 10,
         dataset_type: DatasetType | str | None = None,
+        execution_max_concurrent: int = 16,
     ):
         """
         Initialize Qiskit HumanEval runner.
@@ -87,12 +88,14 @@ class QiskitHumanEvalRunner:
             timeout: Execution timeout in seconds
             max_concurrent: Maximum concurrent API requests
             dataset_type: Dataset type (normal/hard), auto-detected if None
+            execution_max_concurrent: Max concurrent code-execution subprocesses.
         """
         self.dataset_path = Path(dataset_path)
         self.model_client = model_client
         self.num_samples = num_samples_per_task
         self.max_concurrent = max_concurrent
         self.timeout = timeout
+        self.execution_max_concurrent = execution_max_concurrent
         self.evaluator = CodeEvaluator(k_values=k_values or [1, 5, 10], timeout=timeout)
         self.executor = CodeExecutor(timeout=timeout)
         self.console = Console()
@@ -399,6 +402,8 @@ class QiskitHumanEvalRunner:
         sample: dict[str, Any],
         solutions: list[str],
         verify_canonical: bool = False,
+        precomputed_execution_results: list[dict[str, Any]] | None = None,
+        precomputed_canonical_result: dict[str, Any] | None = None,
     ) -> SampleResult:
         """
         Evaluate a single sample with detailed results.
@@ -407,6 +412,11 @@ class QiskitHumanEvalRunner:
             sample: Sample from dataset
             solutions: List of generated solutions
             verify_canonical: Whether to also verify the canonical solution
+            precomputed_execution_results: If provided, skip execution and use
+                these results (one per solution, in order). Used by the batched
+                concurrent-execution path.
+            precomputed_canonical_result: If provided together with
+                ``verify_canonical=True``, skip canonical execution.
 
         Returns:
             SampleResult with detailed execution info
@@ -416,27 +426,31 @@ class QiskitHumanEvalRunner:
         entry_point = sample.get("entry_point")
         canonical_solution = sample.get("canonical_solution", "")
 
-        # Combine and execute each generated solution
-        combined_codes = []
-        execution_results = []
+        combined_codes = [self.combine_code(sample, s) for s in solutions]
 
-        for solution in solutions:
-            combined = self.combine_code(sample, solution)
-            combined_codes.append(combined)
+        if precomputed_execution_results is not None:
+            if len(precomputed_execution_results) != len(solutions):
+                raise ValueError(
+                    f"precomputed_execution_results length mismatch for {task_id}: "
+                    f"got {len(precomputed_execution_results)}, expected {len(solutions)}"
+                )
+            execution_results = list(precomputed_execution_results)
+        else:
+            execution_results = [
+                self.execute_code(combined, test_code, entry_point) for combined in combined_codes
+            ]
 
-            exec_result = self.execute_code(combined, test_code, entry_point)
-            execution_results.append(exec_result)
-
-        # Verify canonical solution if requested
         canonical_combined = None
         canonical_passed = None
 
         if verify_canonical:
             canonical_combined = self.combine_canonical(sample)
-            canonical_result = self.execute_code(canonical_combined, test_code, entry_point)
+            if precomputed_canonical_result is not None:
+                canonical_result = precomputed_canonical_result
+            else:
+                canonical_result = self.execute_code(canonical_combined, test_code, entry_point)
             canonical_passed = canonical_result["success"]
 
-        # Compute metrics
         passed_count = sum(1 for r in execution_results if r["success"])
         success = passed_count > 0
 
@@ -462,6 +476,98 @@ class QiskitHumanEvalRunner:
             metrics=metrics,
             success=success,
         )
+
+    async def _execute_all_async(
+        self,
+        samples: list[dict[str, Any]],
+        solutions_dict: dict[str, list[str]],
+        verify_canonical: bool,
+    ) -> tuple[
+        dict[str, list[dict[str, Any]]],
+        dict[str, dict[str, Any]],
+    ]:
+        """Batched code execution for all samples.
+
+        Collects every (generated_solution, canonical?) execution item up
+        front, runs them through ``executor.execute_many_async`` under a
+        single semaphore, and returns per-sample dicts keyed by task_id.
+        """
+        gen_items: list[tuple[str, str | None, str | None]] = []
+        gen_index: list[tuple[str, int]] = []
+
+        canon_items: list[tuple[str, str | None, str | None]] = []
+        canon_index: list[str] = []
+
+        per_sample_exec: dict[str, list[dict[str, Any]]] = {}
+
+        for sample in samples:
+            task_id = sample["task_id"]
+            test_code = sample.get("test", "")
+            entry_point = sample.get("entry_point")
+            solutions = solutions_dict.get(task_id, [])
+
+            per_sample_exec[task_id] = [None] * len(solutions)
+            for s_idx, solution in enumerate(solutions):
+                combined = self.combine_code(sample, solution)
+                gen_items.append((combined, test_code, entry_point))
+                gen_index.append((task_id, s_idx))
+
+            if verify_canonical:
+                canon_items.append((self.combine_canonical(sample), test_code, entry_point))
+                canon_index.append(task_id)
+
+        per_sample_canonical: dict[str, dict[str, Any]] = {}
+        total = len(gen_items) + len(canon_items)
+        if total == 0:
+            return per_sample_exec, per_sample_canonical
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task(
+                f"Executing code (pool={self.execution_max_concurrent})...", total=total
+            )
+
+            def _advance(count: int) -> None:
+                progress.update(task, completed=count)
+
+            gen_results = await self.executor.execute_many_async(
+                gen_items,
+                max_concurrent=self.execution_max_concurrent,
+                progress_callback=_advance,
+            )
+            gen_offset = len(gen_items)
+            if canon_items:
+                canon_results = await self.executor.execute_many_async(
+                    canon_items,
+                    max_concurrent=self.execution_max_concurrent,
+                    progress_callback=lambda c: _advance(gen_offset + c),
+                )
+            else:
+                canon_results = []
+
+        for (task_id, s_idx), res in zip(gen_index, gen_results):
+            per_sample_exec[task_id][s_idx] = {
+                "success": res.success,
+                "error": res.error if not res.success else "",
+                "output": res.output,
+                "timeout": res.timeout,
+            }
+
+        for task_id, res in zip(canon_index, canon_results):
+            per_sample_canonical[task_id] = {
+                "success": res.success,
+                "error": res.error if not res.success else "",
+                "output": res.output,
+                "timeout": res.timeout,
+            }
+
+        return per_sample_exec, per_sample_canonical
 
     def evaluate(
         self,
@@ -505,8 +611,15 @@ class QiskitHumanEvalRunner:
         # Generate solutions
         solutions_dict = self.generate_solutions(samples, system_prompt)
 
-        # Evaluate each sample with detailed results
-        self.console.print("\n[bold]Evaluating solutions...[/bold]")
+        # Run all code executions concurrently (behavior-preserving)
+        self.console.print("\n[bold]Executing generated code...[/bold]")
+        exec_map, canonical_map = asyncio.run(
+            self._execute_all_async(samples, solutions_dict, verify_canonical)
+        )
+
+        # Evaluate each sample with detailed results using the pre-computed
+        # execution outputs.
+        self.console.print("\n[bold]Aggregating per-sample metrics...[/bold]")
         detailed_results: list[SampleResult] = []
 
         with Progress(
@@ -517,14 +630,18 @@ class QiskitHumanEvalRunner:
             TimeElapsedColumn(),
             console=self.console,
         ) as progress:
-            eval_task = progress.add_task("Evaluating...", total=len(samples))
+            eval_task = progress.add_task("Aggregating...", total=len(samples))
 
             for sample in samples:
                 task_id = sample["task_id"]
                 solutions = solutions_dict.get(task_id, [])
 
                 result = self.evaluate_sample_detailed(
-                    sample, solutions, verify_canonical=verify_canonical
+                    sample,
+                    solutions,
+                    verify_canonical=verify_canonical,
+                    precomputed_execution_results=exec_map.get(task_id),
+                    precomputed_canonical_result=canonical_map.get(task_id),
                 )
                 detailed_results.append(result)
 
@@ -735,6 +852,16 @@ class QiskitHumanEvalRunner:
         results = []
         failures = []
 
+        items: list[tuple[str, str | None, str | None]] = []
+        for sample in samples:
+            items.append(
+                (
+                    self.combine_canonical(sample),
+                    sample.get("test", ""),
+                    sample.get("entry_point"),
+                )
+            )
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -743,29 +870,30 @@ class QiskitHumanEvalRunner:
             TimeElapsedColumn(),
             console=self.console,
         ) as progress:
-            task = progress.add_task("Verifying...", total=len(samples))
+            task = progress.add_task(
+                f"Verifying (pool={self.execution_max_concurrent})...", total=len(samples)
+            )
 
-            for sample in samples:
-                task_id = sample.get("task_id", "unknown")
-                test_code = sample.get("test", "")
-                entry_point = sample.get("entry_point")
+            exec_results = asyncio.run(
+                self.executor.execute_many_async(
+                    items,
+                    max_concurrent=self.execution_max_concurrent,
+                    progress_callback=lambda c: progress.update(task, completed=c),
+                )
+            )
 
-                combined_code = self.combine_canonical(sample)
-                exec_result = self.execute_code(combined_code, test_code, entry_point)
-
-                result = {
-                    "task_id": task_id,
-                    "passed": exec_result["success"],
-                    "combined_code": combined_code,
-                    "test_code": test_code,
-                    "error": exec_result.get("error", ""),
-                }
-                results.append(result)
-
-                if not exec_result["success"]:
-                    failures.append(result)
-
-                progress.update(task, advance=1)
+        for sample, (combined_code, test_code, _entry), exec_r in zip(samples, items, exec_results):
+            task_id = sample.get("task_id", "unknown")
+            result = {
+                "task_id": task_id,
+                "passed": exec_r.success,
+                "combined_code": combined_code,
+                "test_code": test_code,
+                "error": exec_r.error if not exec_r.success else "",
+            }
+            results.append(result)
+            if not exec_r.success:
+                failures.append(result)
 
         # Print summary
         passed = len(results) - len(failures)
