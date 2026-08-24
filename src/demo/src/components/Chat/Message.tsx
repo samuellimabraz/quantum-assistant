@@ -1,16 +1,14 @@
 'use client';
 
 import { useMemo, useState, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import { InlineMath, BlockMath } from 'react-katex';
 import { Copy, Check, Play, Square, Edit2, X } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { clsx } from 'clsx';
 import { QubitIcon } from './QubitIcon';
 import { ExecutionResult, ExecutionResultData } from './ExecutionResult';
+import { MarkdownContent } from './MarkdownContent';
+import { ExpandableImage } from '../ui/ImageLightbox';
 import type { Message as MessageType } from '@/types';
 
 interface MessageProps {
@@ -362,36 +360,6 @@ function detectLanguage(code: string): string {
   return 'python';
 }
 
-function looksLikeCode(text: string): boolean {
-  // Multi-line code indicators
-  if (text.includes('\n')) {
-    const codeIndicators = [
-      /^from\s+/m,
-      /^import\s+/m,
-      /^def\s+/m,
-      /^class\s+/m,
-      /^\s*return\s+/m,
-      /QuantumCircuit/,
-      /Parameter\(/,
-      /\.\w+\([^)]*\)/m, // Method calls like qc.h(), qc.cx()
-    ];
-    return codeIndicators.some((p) => p.test(text));
-  }
-
-  // Single-line code indicators for function completion responses
-  const singleLinePatterns = [
-    /^return\s+\w+/,                          // return circuit.control(...)
-    /^\w+\s*=\s*\w+\([^)]*\)/,                // theta = Parameter("theta")
-    /^\w+\.\w+\([^)]*\)$/,                    // circuit.control(num_ctrl_qubits)
-    /\w+\s*=\s*\w+\([^)]*\)(?:\s+\w+\.|\s+\w+\s*=)/, // Multiple statements
-    /QuantumCircuit\(/,
-    /Parameter\(/,
-    /\.control\(/,
-    /\.measure\(/,
-  ];
-  return singleLinePatterns.some((p) => p.test(text.trim()));
-}
-
 export function Message({ message, onCopyCode, loadingStatus }: MessageProps) {
   const isUser = message.role === 'user';
   const isLoading = message.isLoading;
@@ -414,47 +382,6 @@ export function Message({ message, onCopyCode, loadingStatus }: MessageProps) {
   const imageSource =
     message.imageUrl || (message.imageBase64 ? `data:image/jpeg;base64,${message.imageBase64}` : null);
 
-  const processedContent = useMemo(() => {
-    let content = message.content;
-
-    // Convert non-standard math delimiters to standard LaTeX format
-    // Display math: [ ... ] containing LaTeX → $$ ... $$
-    content = content.replace(
-      /\[\s*(\\[a-zA-Z][^\]]*)\s*\]/g,
-      (match, inner) => `\n$$\n${inner.trim()}\n$$\n`
-    );
-
-    // Inline math with \(...\) → $...$
-    content = content.replace(
-      /\\\(([^)]+)\\\)/g,
-      (match, inner) => `$${inner}$`
-    );
-
-    // Inline math: (expression) containing LaTeX → $...$
-    // Match parentheses containing backslash commands but not nested parens
-    content = content.replace(
-      /\(([^()]*(?:\\[a-zA-Z{}^_]|\\frac|\\sqrt|\\sum|\\exp|\\left|\\right|\\bigl|\\bigr|\\Bigl|\\Bigr|\|[01]\\rangle)[^()]*)\)/g,
-      (match, inner) => {
-        // Only convert if it really looks like math
-        if (/\\[a-zA-Z]/.test(inner) || /\|[01n]\\rangle/.test(inner)) {
-          return `$${inner}$`;
-        }
-        return match;
-      }
-    );
-
-    // Code detection for non-markdown responses
-    if (!content.includes('```') && !content.includes('$$') && !content.includes('$') && looksLikeCode(content)) {
-      content = content
-        .replace(/(\w+\s*=\s*\w+\([^)]*\))\s+(\w+\.)/g, '$1\n$2')
-        .replace(/(\w+\.[a-z_]+\([^)]*\))\s+(\w+\.)/g, '$1\n$2');
-
-      content = '```python\n' + content + '\n```';
-    }
-
-    return content;
-  }, [message.content]);
-
   return (
     <div className={clsx('flex gap-3 animate-in', isUser ? 'flex-row-reverse' : 'flex-row')}>
       <div className="flex-shrink-0">{avatar}</div>
@@ -462,10 +389,10 @@ export function Message({ message, onCopyCode, loadingStatus }: MessageProps) {
       <div className={clsx('flex-1 max-w-[85%]', isUser ? 'flex flex-col items-end' : '')}>
         {imageSource && (
           <div className="mb-2 max-w-xs">
-            <img
+            <ExpandableImage
               src={imageSource}
               alt="Attached image"
-              className="rounded-lg border border-zinc-700/50 max-h-64 object-contain bg-zinc-900"
+              className="max-h-64 w-full object-contain"
             />
           </div>
         )}
@@ -487,67 +414,13 @@ export function Message({ message, onCopyCode, loadingStatus }: MessageProps) {
               </div>
             )
           ) : (
-            <div className={clsx('markdown-content', isUser && 'text-white/90')}>
-              <ReactMarkdown
-                remarkPlugins={[remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-                components={{
-                  code({ className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const code = String(children).replace(/\n$/, '');
-
-                    // Check if this is a math block (from remark-math)
-                    if (className === 'language-math' || className === 'math-inline') {
-                      try {
-                        return <InlineMath math={code} />;
-                      } catch {
-                        return <code className="text-red-400">{code}</code>;
-                      }
-                    }
-
-                    const isBlock = match || code.includes('\n') || looksLikeCode(code);
-
-                    if (isBlock) {
-                      return <CodeBlock language={match?.[1] || ''} code={code} onCopy={onCopyCode} />;
-                    }
-
-                    return (
-                      <code className={clsx('bg-zinc-700/50 px-1.5 py-0.5 rounded text-sm', className)} {...props}>
-                        {children}
-                      </code>
-                    );
-                  },
-                  pre({ children }) {
-                    return <>{children}</>;
-                  },
-                  // Handle math blocks from remark-math
-                  span({ className, children, ...props }) {
-                    if (className === 'math math-inline') {
-                      try {
-                        const math = String(children);
-                        return <InlineMath math={math} />;
-                      } catch {
-                        return <span className="text-red-400">{children}</span>;
-                      }
-                    }
-                    return <span className={className} {...props}>{children}</span>;
-                  },
-                  div({ className, children, ...props }) {
-                    if (className === 'math math-display') {
-                      try {
-                        const math = String(children);
-                        return <BlockMath math={math} />;
-                      } catch {
-                        return <div className="text-red-400">{children}</div>;
-                      }
-                    }
-                    return <div className={className} {...props}>{children}</div>;
-                  },
-                }}
-              >
-                {processedContent}
-              </ReactMarkdown>
-            </div>
+            <MarkdownContent
+              content={message.content}
+              className={isUser ? 'text-white/90' : undefined}
+              renderCodeBlock={({ language, code }) => (
+                <CodeBlock language={language} code={code} onCopy={onCopyCode} />
+              )}
+            />
           )}
         </div>
 

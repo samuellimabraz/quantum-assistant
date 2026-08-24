@@ -2,12 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Sparkles, Send, Loader2, Trash2, ChevronLeft, Copy, Check, Play } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { clsx } from 'clsx';
 import type { CodingProblem } from '@/types';
 import { postProcessResponse } from '@/lib/utils/response';
 import { LoadingStatus } from '../Chat/LoadingStatus';
+import { MarkdownContent } from '../Chat/MarkdownContent';
 
 interface AIHelperProps {
   problem: CodingProblem | null;
@@ -595,53 +595,18 @@ export function AIHelper({
                       hasStartedStreaming={hasStartedStreaming}
                     />
                   ) : (
-                    <ReactMarkdown
-                      components={{
-                        code({ className, children, ...props }) {
-                          const match = /language-(\w+)/.exec(className || '');
-                          const code = String(children).replace(/\n$/, '');
-                          const isBlock = match || code.includes('\n') || looksLikeCode(code);
-
-                          if (isBlock) {
-                            return (
-                              <CodeBlock
-                                code={code}
-                                language={match?.[1] || 'python'}
-                                onCopy={() => handleCopyCode(code, message.id)}
-                                onApply={onApplyCode ? () => handleApplyCode(code) : undefined}
-                                copied={copiedId === message.id}
-                              />
-                            );
-                          }
-
-                          return (
-                            <code className="bg-zinc-700/50 px-1 py-0.5 rounded text-xs" {...props}>
-                              {children}
-                            </code>
-                          );
-                        },
-                        pre({ children }) {
-                          return <>{children}</>;
-                        },
-                        p({ children }) {
-                          return <p className="mb-2 last:mb-0">{children}</p>;
-                        },
-                        ul({ children }) {
-                          return <ul className="list-disc ml-4 mb-2 space-y-1">{children}</ul>;
-                        },
-                        ol({ children }) {
-                          return <ol className="list-decimal ml-4 mb-2 space-y-1">{children}</ol>;
-                        },
-                        li({ children }) {
-                          return <li className="text-zinc-300">{children}</li>;
-                        },
-                        strong({ children }) {
-                          return <strong className="font-semibold text-zinc-200">{children}</strong>;
-                        },
-                      }}
-                    >
-                      {processedContent}
-                    </ReactMarkdown>
+                    <MarkdownContent
+                      content={processedContent}
+                      renderCodeBlock={({ language, code }) => (
+                        <CodeBlock
+                          code={code}
+                          language={language || 'python'}
+                          onCopy={() => handleCopyCode(code, message.id)}
+                          onApply={onApplyCode ? () => handleApplyCode(code) : undefined}
+                          copied={copiedId === message.id}
+                        />
+                      )}
+                    />
                   )}
                 </div>
               </div>

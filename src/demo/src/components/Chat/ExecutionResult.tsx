@@ -16,6 +16,7 @@ import {
     ZoomIn,
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { ImageLightbox } from '../ui/ImageLightbox';
 
 export interface ExecutionResultData {
     success: boolean;
@@ -80,40 +81,13 @@ function ImageViewer({ images }: { images: string[] }) {
                 ))}
             </div>
 
-            {/* Full-size image modal */}
             {selectedImage !== null && (
-                <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-                    onClick={() => setSelectedImage(null)}
-                >
-                    <div className="relative max-w-4xl max-h-[90vh] overflow-auto">
-                        <img
-                            src={`data:image/png;base64,${images[selectedImage]}`}
-                            alt={`Output figure ${selectedImage + 1}`}
-                            className="max-w-full h-auto rounded-lg"
-                            onClick={(e) => e.stopPropagation()}
-                        />
-                        <div className="absolute top-2 right-2 flex gap-2">
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDownload(images[selectedImage], selectedImage);
-                                }}
-                                className="p-2 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 transition-colors"
-                                title="Download image"
-                            >
-                                <Download className="w-4 h-4 text-zinc-300" />
-                            </button>
-                            <button
-                                onClick={() => setSelectedImage(null)}
-                                className="p-2 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 transition-colors"
-                                title="Close"
-                            >
-                                <XCircle className="w-4 h-4 text-zinc-300" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ImageLightbox
+                    src={`data:image/png;base64,${images[selectedImage]}`}
+                    alt={`Output figure ${selectedImage + 1}`}
+                    onClose={() => setSelectedImage(null)}
+                    onDownload={() => handleDownload(images[selectedImage], selectedImage)}
+                />
             )}
         </div>
     );
