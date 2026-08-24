@@ -9,6 +9,7 @@ import { TestRunner } from './TestRunner';
 import { AIHelper } from './AIHelper';
 import { TASK_LABELS, CATEGORY_LABELS } from '@/config/constants';
 import { extractCodeFromResponse, normalizeIndentation } from '@/lib/utils/response';
+import { ExpandableImage } from '../ui/ImageLightbox';
 import type { CodingProblem, TestResult } from '@/types';
 
 interface PracticeInterfaceProps {
@@ -351,10 +352,10 @@ export function PracticeInterface({ className }: PracticeInterfaceProps) {
                   </div>
                   {selectedProblem.imageUrl && (
                     <div className="flex-shrink-0">
-                      <img
+                      <ExpandableImage
                         src={selectedProblem.imageUrl}
                         alt="Problem illustration"
-                        className="max-w-[160px] max-h-24 rounded-lg border border-zinc-700/50 bg-zinc-900 object-contain"
+                        className="max-w-[160px] max-h-24 object-contain"
                       />
                     </div>
                   )}

@@ -1,7 +1,162 @@
 /**
  * Response processing utilities for formatting model output.
- * Handles code extraction, markdown formatting, and indentation normalization.
+ * Handles code extraction, markdown formatting, math delimiters, and indentation.
  */
+
+const FENCE_PLACEHOLDER = '\u0000FENCE';
+
+/**
+ * Convert LaTeX `\(...\)` / `\[...\]` to `$...$` / `$$...$$` for remark-math.
+ * Matches the closing backslash-delimiter so nested parentheses stay intact.
+ * Fenced code blocks are left unchanged.
+ */
+export function normalizeMathDelimiters(content: string): string {
+  if (!content) return content;
+
+  const fences: string[] = [];
+  const withPlaceholders = content.replace(/```[\s\S]*?```/g, (block) => {
+    const token = `${FENCE_PLACEHOLDER}${fences.length}\u0000`;
+    fences.push(block);
+    return token;
+  });
+
+  const converted = convertLatexDelimiters(withPlaceholders);
+
+  return converted.replace(
+    new RegExp(`${FENCE_PLACEHOLDER}(\\d+)\u0000`, 'g'),
+    (_, i) => fences[Number(i)]
+  );
+}
+
+function convertLatexDelimiters(content: string): string {
+  let result = '';
+  let i = 0;
+  const n = content.length;
+
+  while (i < n) {
+    if (content[i] === '\\' && i + 1 < n) {
+      const next = content[i + 1];
+      if (next === '[' || next === '(') {
+        const closer = next === '[' ? '\\]' : '\\)';
+        const close = findClosingDelimiter(content, i + 2, closer);
+        if (close !== -1) {
+          const inner = content.slice(i + 2, close).trim();
+          if (next === '[') {
+            result += `\n$$\n${inner}\n$$\n`;
+          } else {
+            result += `$${inner}$`;
+          }
+          i = close + 2;
+          continue;
+        }
+      }
+    }
+    result += content[i];
+    i++;
+  }
+
+  return result;
+}
+
+function findClosingDelimiter(content: string, start: number, closer: string): number {
+  for (let i = start; i < content.length - 1; i++) {
+    if (content[i] !== closer[0] || content[i + 1] !== closer[1]) continue;
+
+    let backslashes = 0;
+    for (let j = i - 1; j >= start && content[j] === '\\'; j--) {
+      backslashes++;
+    }
+    if (backslashes % 2 === 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Detect whether text looks like Python/Qiskit (or similar) code.
+ */
+export function looksLikeCode(text: string): boolean {
+  if (text.includes('\n')) {
+    const codeIndicators = [
+      /^from\s+/m,
+      /^import\s+/m,
+      /^def\s+/m,
+      /^class\s+/m,
+      /^\s*return\s+/m,
+      /QuantumCircuit/,
+      /Parameter\(/,
+      /\.\w+\([^)]*\)/m,
+    ];
+    return codeIndicators.some((p) => p.test(text));
+  }
+
+  const singleLinePatterns = [
+    /^return\s+\w+/,
+    /^\w+\s*=\s*\w+\([^)]*\)/,
+    /^\w+\.\w+\([^)]*\)$/,
+    /\w+\s*=\s*\w+\([^)]*\)(?:\s+\w+\.|\s+\w+\s*=)/,
+    /QuantumCircuit\(/,
+    /Parameter\(/,
+    /\.control\(/,
+    /\.measure\(/,
+  ];
+  return singleLinePatterns.some((p) => p.test(text.trim()));
+}
+
+/**
+ * Prepare model output for markdown rendering: math delimiters, then
+ * wrap unfenced code in a python block when the whole response is code.
+ */
+export function prepareMarkdownContent(content: string): string {
+  let prepared = normalizeMathDelimiters(content);
+
+  if (
+    !prepared.includes('```') &&
+    !prepared.includes('$$') &&
+    !prepared.includes('$') &&
+    looksLikeCode(prepared)
+  ) {
+    prepared = prepared
+      .replace(/(\w+\s*=\s*\w+\([^)]*\))\s+(\w+\.)/g, '$1\n$2')
+      .replace(/(\w+\.[a-z_]+\([^)]*\))\s+(\w+\.)/g, '$1\n$2');
+    prepared = '```python\n' + prepared + '\n```';
+  }
+
+  return prepared;
+}
+
+/**
+ * Strip markdown fences and collapse whitespace for compact list previews.
+ * If the question is only a code fence, keep a short excerpt (e.g. the def line).
+ */
+export function previewText(text: string, maxLength: number = 120): string {
+  const fenceBodies: string[] = [];
+  const withoutFences = text.replace(/```(?:\w+)?\s*\n?([\s\S]*?)```/g, (_, body) => {
+    fenceBodies.push(body);
+    return ' ';
+  });
+
+  let preview = withoutFences
+    .replace(/`+/g, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (preview.length < 24 && fenceBodies.length > 0) {
+    const lines = fenceBodies[0]
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && line !== 'pass' && !line.startsWith('#'));
+    const excerpt = lines.find((line) => line.startsWith('def ')) || lines[0];
+    if (excerpt) {
+      preview = preview ? `${preview} ${excerpt}` : excerpt;
+    }
+  }
+
+  if (preview.length <= maxLength) return preview;
+  return preview.substring(0, maxLength).trimEnd() + '...';
+}
 
 /**
  * Extract code blocks from model response.

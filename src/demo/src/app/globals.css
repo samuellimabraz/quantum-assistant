@@ -253,6 +253,16 @@
   /* zinc-200 */
 }
 
+/* Failed math: muted inline code instead of KaTeX's default red source */
+.katex-error {
+  color: #a1a1aa !important;
+  background: rgba(63, 63, 70, 0.5);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
 /* Execution result styling */
 .execution-output {
   @apply font-mono text-sm;

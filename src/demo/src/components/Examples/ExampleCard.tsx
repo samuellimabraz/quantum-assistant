@@ -3,6 +3,8 @@
 import { Image as ImageIcon, Code, FileQuestion, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 import { TASK_LABELS, CATEGORY_LABELS } from '@/config/constants';
+import { previewText } from '@/lib/utils/response';
+import { ExpandableImage } from '../ui/ImageLightbox';
 import type { DatasetExample } from '@/types';
 
 interface ExampleCardProps {
@@ -26,11 +28,6 @@ export function ExampleCard({ example, onSelect, isSelected }: ExampleCardProps)
     }
   };
 
-  const truncateText = (text: string, maxLength: number) => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength).trim() + '...';
-  };
-
   // Muted badge colors
   const badgeColors: Record<string, string> = {
     function_completion: 'bg-emerald-900/30 text-emerald-400 border-emerald-700/30',
@@ -38,11 +35,21 @@ export function ExampleCard({ example, onSelect, isSelected }: ExampleCardProps)
     qa: 'bg-amber-900/30 text-amber-400 border-amber-700/30',
   };
 
+  const selectExample = () => onSelect(example);
+
   return (
-    <button
-      onClick={() => onSelect(example)}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={selectExample}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          selectExample();
+        }
+      }}
       className={clsx(
-        'w-full text-left p-3 rounded-lg transition-all duration-200 group',
+        'w-full text-left p-3 rounded-lg transition-all duration-200 group cursor-pointer',
         'border hover:border-teal-700/40',
         isSelected
           ? 'bg-teal-900/20 border-teal-700/40'
@@ -51,16 +58,18 @@ export function ExampleCard({ example, onSelect, isSelected }: ExampleCardProps)
     >
       <div className="flex items-start gap-3">
         {example.hasImage && (
-          <div className="flex-shrink-0 w-14 h-14 rounded-md bg-zinc-800 border border-zinc-700/50 flex items-center justify-center overflow-hidden">
+          <div className="flex-shrink-0 w-14 h-14" onClick={(e) => e.stopPropagation()}>
             {example.imageUrl ? (
-              <img
+              <ExpandableImage
                 src={example.imageUrl}
-                alt=""
-                className="w-full h-full object-cover"
-                loading="lazy"
+                alt="Example illustration"
+                className="w-14 h-14 object-cover"
+                wrapperClassName="w-14 h-14 rounded-md"
               />
             ) : (
-              <ImageIcon className="w-5 h-5 text-zinc-500" />
+              <div className="w-14 h-14 rounded-md bg-zinc-800 border border-zinc-700/50 flex items-center justify-center">
+                <ImageIcon className="w-5 h-5 text-zinc-500" />
+              </div>
             )}
           </div>
         )}
@@ -77,7 +86,7 @@ export function ExampleCard({ example, onSelect, isSelected }: ExampleCardProps)
           </div>
 
           <p className="text-sm text-zinc-300 leading-snug font-mono">
-            {truncateText(example.question, 120)}
+            {previewText(example.question, 120)}
           </p>
         </div>
 
@@ -89,6 +98,6 @@ export function ExampleCard({ example, onSelect, isSelected }: ExampleCardProps)
           )}
         />
       </div>
-    </button>
+    </div>
   );
 }

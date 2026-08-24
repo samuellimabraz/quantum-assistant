@@ -19,6 +19,7 @@ import {
 import { clsx } from 'clsx';
 import { useDataset } from '@/lib/dataset/DatasetProvider';
 import { TASK_LABELS, CATEGORY_LABELS } from '@/config/constants';
+import { previewText } from '@/lib/utils/response';
 import type { CodingProblem, TaskType, Category } from '@/types';
 
 interface ProblemListProps {
@@ -111,11 +112,6 @@ export function ProblemList({
     currentPageSolved: problems.filter((p) => solvedProblems.has(p.id)).length,
     displayed: problems.length,
   }), [problems, solvedProblems, totalProblems]);
-
-  const truncateText = (text: string, maxLength: number) => {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength).trim() + '...';
-  };
 
   const clearSearch = () => {
     setSearchQuery('');
@@ -378,7 +374,7 @@ export function ProblemList({
                       </div>
 
                       <p className="text-sm text-zinc-300 leading-snug">
-                        {truncateText(problem.question, 120)}
+                        {previewText(problem.question, 120)}
                       </p>
                     </div>
                   </div>
